@@ -26,6 +26,15 @@ export CXX=${CXX:-x86_64-conda-linux-gnu-g++}
 export PARAGRAM_MAX_PLANES=128 PARAGRAM_MAX_VERTS=128     # Paragram build variant (JIT, first import)
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
+# conda-forge keeps the CUDA headers and libraries under $CONDA_PREFIX/targets/x86_64-linux, which
+# torch's JIT build does not add when compiling *host* code (ext.cpp): make them visible here.
+CUDA_TARGET=$CONDA_PREFIX/targets/x86_64-linux
+[ -d "$CUDA_TARGET/include" ] && export CPATH="$CUDA_TARGET/include${CPATH:+:$CPATH}"
+[ -d "$CUDA_TARGET/lib" ] && export LIBRARY_PATH="$CUDA_TARGET/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+# the driver stub is a last resort for -lcuda; the real libcuda.so of the GPU node wins if present
+[ -d "$CUDA_TARGET/lib/stubs" ] && export LIBRARY_PATH="${LIBRARY_PATH:+$LIBRARY_PATH:}$CUDA_TARGET/lib/stubs"
+echo "cuda_runtime_api.h: $(ls "$CUDA_TARGET/include/cuda_runtime_api.h" 2>/dev/null || ls "$CONDA_PREFIX/include/cuda_runtime_api.h" 2>/dev/null || echo NOT FOUND)"
 REPEATS=${REPEATS:-10}
 OUT=results/$SLURM_JOB_ID
 mkdir -p "$OUT"

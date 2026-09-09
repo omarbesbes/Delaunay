@@ -28,6 +28,15 @@ source activate "$ENV"
 set -u
 export CUDA_HOME=$CONDA_PREFIX
 export TORCH_CUDA_ARCH_LIST=$ARCHS
+
+# conda-forge keeps the CUDA headers and libraries under $CONDA_PREFIX/targets/x86_64-linux, which
+# torch's JIT build does not add when compiling *host* code (ext.cpp): make them visible here.
+CUDA_TARGET=$CONDA_PREFIX/targets/x86_64-linux
+[ -d "$CUDA_TARGET/include" ] && export CPATH="$CUDA_TARGET/include${CPATH:+:$CPATH}"
+[ -d "$CUDA_TARGET/lib" ] && export LIBRARY_PATH="$CUDA_TARGET/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+# the driver stub is a last resort for -lcuda; the real libcuda.so of the GPU node wins if present
+[ -d "$CUDA_TARGET/lib/stubs" ] && export LIBRARY_PATH="${LIBRARY_PATH:+$LIBRARY_PATH:}$CUDA_TARGET/lib/stubs"
+echo "cuda_runtime_api.h: $(ls "$CUDA_TARGET/include/cuda_runtime_api.h" 2>/dev/null || ls "$CONDA_PREFIX/include/cuda_runtime_api.h" 2>/dev/null || echo NOT FOUND)"
 export CC=${CC:-x86_64-conda-linux-gnu-gcc}
 export CXX=${CXX:-x86_64-conda-linux-gnu-g++}
 echo "python: $(python -V) | nvcc: $(nvcc --version | tail -1) | host compiler: $($CXX --version | head -1)"
