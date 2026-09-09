@@ -90,13 +90,17 @@ PY
 }
 
 echo "== CUDA readiness"
-for attempt in $(seq 1 30); do
+for attempt in $(seq 1 6); do
   set +e
   probe=$(cuda_probe 2>&1)
   rc=$?
   set -e
   echo "$probe" | sed 's/^/   /'
   [ "$rc" = 0 ] && break
+  if [ "$attempt" = 1 ]; then
+    echo "== GPU diagnostics (first probe failure)"
+    bash diagnose_gpu.sh 2>&1 | tee "$OUT/diagnose_gpu.txt" || true
+  fi
   if [ "$rc" = 2 ]; then
     echo "   FAILED: this torch build has no kernels for this GPU architecture."
     echo "   Either submit to the A100 partition (#SBATCH --partition=gpua100, sm_80), or reinstall torch"
@@ -106,13 +110,13 @@ for attempt in $(seq 1 30); do
     echo "    Local DeWall and CGAL are standalone and unaffected.)"
     exit 1
   fi
-  if [ "$attempt" = 30 ]; then
-    echo "   FAILED: no usable CUDA context after 5 minutes (device busy). Diagnostics:"
+  if [ "$attempt" = 6 ]; then
+    echo "   FAILED: no usable CUDA context after 1 minute. See $OUT/diagnose_gpu.txt"
     nvidia-smi --query-gpu=compute_mode,memory.used --format=csv
     nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
     exit 1
   fi
-  echo "   attempt $attempt/30: device busy, waiting 10 s"
+  echo "   attempt $attempt/6: device unavailable, waiting 10 s"
   sleep 10
 done
 
