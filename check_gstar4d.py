@@ -1,8 +1,8 @@
 """Smoke-test gStar4D on its own, to tell a broken build from an input it cannot handle.
 
-    python check_gstar4d.py                        # built-in generator, then random clouds
-    python check_gstar4d.py --ply data/*.ply       # ... and subsamples of real point clouds
-    python check_gstar4d.py --timeout 60 --grid 512
+    python check_gstar4d.py                                  # built-in generator, then random clouds
+    python check_gstar4d.py --ply data/*.ply                 # ... and subsamples of real point clouds
+    python check_gstar4d.py --grid 256 512 --jitter 0 1e-6    # sweep the grid and the jitter
 
 Three stages, each case bounded by --timeout and reported on one line:
 
@@ -17,7 +17,10 @@ Three stages, each case bounded by --timeout and reported on one line:
 
 "loops" is the number of star-consistency iterations gStar4D needed (`-verbose`).  Its consistency
 phase is a `do { ... } while (true)` with no iteration cap, so a case that times out with a large
-and growing loop count is not converging on that input.
+and growing loop count is not converging on that input.  Two knobs are worth sweeping there:
+`--jitter`, which removes exact co-spherical / co-planar degeneracies, and `--grid`, the resolution
+of the discrete Voronoi diagram that seeds the initial stars (a finer grid separates the points of
+a non-uniform cloud better; 512^3 costs about 1 GB of VRAM, 1024^3 about 9 GB).
 """
 
 from __future__ import annotations
@@ -47,7 +50,11 @@ def stage1(binary: str, n: int, grid: int, timeout: float) -> bool:
         "-verbose",
         "-check",
     ]
-    print(f"  {'own generator':<22s} n={n:<8d} ", end="", flush=True)
+    print(
+        f"  {'own generator':<22s} n={n:<8d} g={grid:<5d}             ",
+        end="",
+        flush=True,
+    )
     t0 = time.perf_counter()
     try:
         r = subprocess.run(
@@ -67,21 +74,35 @@ def stage1(binary: str, n: int, grid: int, timeout: float) -> bool:
     loops = re.findall(r"^Loop:\s*(\d+)\s*$", r.stdout, re.MULTILINE)
     total = re.search(r"^\s*Total Time:\s*([0-9.eE+-]+)\s*$", r.stdout, re.MULTILINE)
     insphere = "Tetra in-sphere is correct" in r.stdout
-    euler = "Euler characteristic is correct" in r.stdout or "Euler" not in r.stdout
     print(
-        f"OK  {float(total.group(1)) / 1000 if total else secs:6.3f}s  "
+        f"OK  {float(total.group(1)) / 1000 if total else secs:7.3f}s  "
         f"loops={int(loops[-1]) + 1 if loops else '?':<4} "
         f"self-check: in-sphere {'ok' if insphere else 'FAILED'}"
-        + ("" if euler else ", Euler FAILED")
     )
     return insphere
 
 
 def case(
-    name: str, points: np.ndarray, binary: str, grid: int, timeout: float, ref: bool
+    name: str,
+    points: np.ndarray,
+    binary: str,
+    grid: int,
+    timeout: float,
+    ref: bool,
+    jitter: float = 0.0,
+    rng: np.random.Generator | None = None,
 ) -> bool:
-    """Run the benchmark's own runner and compare against the reference on its point set."""
-    print(f"  {name:<22s} n={len(points):<8d} ", end="", flush=True)
+    """Run the benchmark's own runner, then compare against the reference on its point set."""
+    if jitter > 0:  # same convention as test_delaunay_surfaces.py --jitter
+        rng = rng or np.random.default_rng(0)
+        points = points + rng.normal(
+            scale=jitter * np.ptp(points, axis=0).max(), size=points.shape
+        )
+    print(
+        f"  {name:<22s} n={len(points):<8d} g={grid:<5d} jit={jitter:<7g} ",
+        end="",
+        flush=True,
+    )
     try:
         tets, secs, info = T.run_gstar4d(
             points, binary, grid_size=grid, timeout=timeout, verbose=True
@@ -90,7 +111,7 @@ def case(
         print(f"FAILED: {str(exc)[:300]}")
         return False
     msg = (
-        f"OK  {secs:6.3f}s  tets={len(tets):<8d} loops={info.get('consistency_loops', '?'):<4} "
+        f"OK  {secs:7.3f}s  tets={len(tets):<8d} loops={info.get('consistency_loops', '?'):<4} "
         f"match={info['max_match_dist']:.0e} dropped={info['dropped_duplicate_points']}"
         f"+{info['dropped_after_scaling']}"
     )
@@ -117,7 +138,20 @@ def main() -> int:
         "--timeout", type=float, default=120.0, help="per case, seconds (default 120)"
     )
     ap.add_argument(
-        "--grid", type=int, default=256, help="gStar4D PBA grid (-g, default 256)"
+        "--grid",
+        type=int,
+        nargs="+",
+        default=[256],
+        help="gStar4D PBA grid sizes to try (-g, default 256); the grid seeds the initial stars, so "
+        "a finer one can help on a non-uniform cloud (512^3 costs ~1 GB of VRAM, 1024^3 ~9 GB)",
+    )
+    ap.add_argument(
+        "--jitter",
+        type=float,
+        nargs="+",
+        default=[0.0],
+        help="relative Gaussian jitters to try, as in the benchmark's --jitter (default 0): jitter "
+        "removes the exact co-spherical and co-planar degeneracies of a structured cloud",
     )
     ap.add_argument(
         "--sizes",
@@ -141,39 +175,58 @@ def main() -> int:
         )
         return 2
     print(
-        f"binary: {os.path.abspath(args.bin)}   grid: {args.grid}^3   timeout: {args.timeout:.0f}s/case\n"
+        f"binary: {os.path.abspath(args.bin)}   grids: {args.grid}   jitters: {args.jitter}   "
+        f"timeout: {args.timeout:.0f}s/case\n"
     )
     rng = np.random.default_rng(args.seed)
     ok = True
 
     print("[1] the tool's own uniform points (tests the build, not this benchmark)")
-    ok &= stage1(args.bin, min(args.sizes[0], 10000), args.grid, args.timeout)
+    ok &= stage1(args.bin, min(args.sizes[0], 10000), args.grid[0], args.timeout)
 
     print("\n[2] uniform random points through the benchmark's runner")
     for n in args.sizes:
-        ok &= case(
-            "uniform in a cube",
-            rng.random((n, 3)),
-            args.bin,
-            args.grid,
-            args.timeout,
-            not args.no_reference,
-        )
+        pts = rng.random((n, 3))
+        for grid in args.grid:
+            for jit in args.jitter:
+                ok &= case(
+                    "uniform in a cube",
+                    pts,
+                    args.bin,
+                    grid,
+                    args.timeout,
+                    not args.no_reference,
+                    jit,
+                    rng,
+                )
 
     for path in args.ply:
         name = os.path.splitext(os.path.basename(path))[0]
-        pts = T.unit_cube(T.load_ply_vertices(path))
-        print(f"\n[3] {name} ({len(pts)} points), subsampled")
-        for n in [s for s in args.sizes if s < len(pts)] + [len(pts)]:
-            sub = pts if n == len(pts) else pts[rng.choice(len(pts), n, replace=False)]
-            ok &= case(
-                name, sub, args.bin, args.grid, args.timeout, not args.no_reference
+        cloud = T.unit_cube(T.load_ply_vertices(path))
+        print(f"\n[3] {name} ({len(cloud)} points), subsampled")
+        for n in [s for s in args.sizes if s < len(cloud)] + [len(cloud)]:
+            sub = (
+                cloud
+                if n == len(cloud)
+                else cloud[rng.choice(len(cloud), n, replace=False)]
             )
+            for grid in args.grid:
+                for jit in args.jitter:
+                    ok &= case(
+                        name,
+                        sub,
+                        args.bin,
+                        grid,
+                        args.timeout,
+                        not args.no_reference,
+                        jit,
+                        rng,
+                    )
 
     print(
         "\nA TIMEOUT in [1] means the build or the CUDA-12 port is broken; a TIMEOUT only in [3] "
-        "means gStar4D does not converge on that input (its consistency loop has no iteration cap),"
-        "\nwhich is a property of the method, not of this benchmark."
+        "means gStar4D does not converge on that input (its consistency loop has no iteration "
+        "cap),\nwhich is a property of the method, not of this benchmark."
     )
     return 0 if ok else 1
 

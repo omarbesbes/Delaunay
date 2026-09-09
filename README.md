@@ -79,7 +79,8 @@ torch cu128, CGAL headers + TBB), so nothing depends on the cluster's module ver
 Is gStar4D working at all? It is the one method that can hang (see the notes at the end), so it
 has its own check — on a GPU node, with the environment active:
 ```bash
-python check_gstar4d.py --sizes 1000 5000 20000 100000 --ply data/*.ply --timeout 120
+python check_gstar4d.py --ply data/*.ply --timeout 120
+python check_gstar4d.py --ply data/*.ply --sizes 50000 --grid 256 512 --jitter 0 1e-6   # what helps?
 ```
 Stage [1] runs the tool's own point generator, with none of this benchmark's code: a timeout there
 means the build or the CUDA-12 port is broken. Stages [2] and [3] go through the benchmark's runner
