@@ -99,6 +99,38 @@ python test_delaunay_surfaces.py --no-analytic --models --ply data/*.ply --unit-
   --geodel-threads $SLURM_CPUS_PER_TASK --json results/test.json
 ```
 
+## Scaling study: time vs number of points
+
+`scaling_study.py` answers a different question from the benchmark: not "is it correct" but "how
+does the time grow with N", for the two point clouds only, with and without jitter. It measures
+time only -- no reference triangulation, no metrics -- and writes one record per
+(cloud, size, jitter, method) measurement.
+
+```bash
+sbatch run_scaling.sbatch                                    # the default sweep, ~29 sizes
+SIZES="2000:200000:10000 200000" sbatch run_scaling.sbatch    # only real subsamples, no tiling
+CLOUD=data/voronoi_jax_068.ply REPEATS=1 sbatch run_scaling.sbatch
+python scaling_study.py --plot-only results/scaling-<jobid>/scaling.json --plot mine.png
+```
+
+Outputs `scaling.png` (log-log, one panel per cloud, solid without jitter and dashed with it, the
+fitted exponent alpha of *t ~ N^alpha* in the legend), `scaling.csv` (for your own plots; it has the
+GPU / CPU split, so Paragram's GPU-only curve can be drawn separately from its CPU repair) and
+`scaling.json`, rewritten after every size so a job that is cut short still leaves a usable curve.
+
+Two things to know about the sizes:
+
+* **The clouds have ~100k points each** (99 990 and 99 981), so anything above that is not a
+  subsample. `points_at()` builds it by **tiling**: the cloud is replicated on a k x k x k lattice
+  of translated copies, so the point spacing -- and with it the local structure and the
+  degeneracies -- is preserved while the extent grows, and the requested number of points is drawn
+  from that lattice (1M points = 27 copies). Every record says how many tiles were used and the
+  plot marks where tiling starts. A tiled input is a fair scaling load but not the same
+  distribution as the real cloud, so read the two regimes separately.
+* A method that fails, times out, or exceeds `--skip-above` (default 60 s) at some size is not
+  measured at larger sizes, and its records say so. That keeps CGAL sequential and Paragram's
+  global-CGAL repair from consuming the whole job at 1M points.
+
 ## Troubleshooting (observed on Ruche)
 
 | symptom | cause | fix |
@@ -138,6 +170,8 @@ extension cache; the job does a warm-up call before timing.
 
 - `test_delaunay_surfaces.py` — the benchmark driver (datasets, methods, metrics, JSON).
 - `make_report.py` — Markdown report + charts from one or several JSON files.
+- `scaling_study.py`, `run_scaling.sbatch` — time vs number of points (2k .. 1M) for the two point
+  clouds, with and without jitter; log-log diagram with fitted exponents, plus CSV.
 - `check_gstar4d.py` — smoke-test gStar4D alone: its own generator, then random clouds, then
   subsamples of the PLY clouds, to separate a broken build from an input it cannot handle.
 - `voronoi_to_delaunay.py` — Voronoi adjacency → Delaunay tetrahedra (torch, GPU or CPU).
