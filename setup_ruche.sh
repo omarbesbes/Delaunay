@@ -6,6 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT=$PWD
+mkdir -p bin third_party results    # git-ignored, absent in a fresh clone
 : "${WORKDIR:?WORKDIR is not set (are you on Ruche?)}"
 ENV=${DELAUNAY_ENV:-$WORKDIR/envs/delaunay}
 ARCHS=${TORCH_CUDA_ARCH_LIST:-"7.0;8.0"}       # V100 (gpu, gpu_test) and A100 (gpua100)
