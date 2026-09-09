@@ -124,7 +124,7 @@ is mapped, raw `cuInit` / `cudaMalloc` error codes, a tiny `nvcc`-built CUDA pro
                               loop has no iteration cap and can spin forever on hard input, and
                               Local DeWall needs minutes on near-co-spherical input
 --gdel3d auto|on|off, --geodel auto|on|off, --geodel-threads N (0 = SLURM_CPUS_PER_TASK, else all cores)
---dewall-bin PATH, --gstar4d-bin PATH, --gstar4d-grid 256 (its PBA grid), --gstar4d-facet-max N
+--dewall-bin PATH, --gstar4d-bin PATH, --gstar4d-grid 512 (its PBA grid; max 512), --gstar4d-facet-max N
 --cgal-bin PATH, --cgal-python PATH
 --n 20000, --models ..., --ply ..., --jitter 1e-6, --adjacency auto|paragram|qhull|ref-edges
 ```
@@ -162,13 +162,18 @@ extension cache; the job does a warm-up call before timing.
   of precision (now one 4-index line at 9 digits, enough to identify the points exactly); and it built only
   for `sm_35`. It is compiled with `-fmad=false`, without which the GPU-side Shewchuk predicates stop being
   exact. It also drops duplicate points, which the benchmark reports.
-- gStar4D is **unstable on the surface point clouds**, and `check_gstar4d.py` is how that was
-  established. It is not a build problem (100k uniform random points: 0.13 s, identical to CGAL,
-  its own self-checks passing) and not simply degeneracy: on `voronoi_iarpa_001` the same 100k
-  points either finish in 0.2-1.5 s or never finish, and which one happens flips with a 1e-6
-  perturbation or a change of grid size. The runs that do finish agree with CGAL. When it hangs it
-  hangs *before* the first star-consistency iteration, so it is not a runaway loop count but a
-  stall in the earlier phases (PBA grid, initial stars, missing-point collection). `--tool-timeout`
-  bounds it: the method is reported as failed for that dataset and the run continues.
+- **gStar4D needs `-g 512` on these point clouds**, which is why that is the default. Its stars are
+  seeded from a `g x g x g` voxel grid holding *one point per voxel*; the rest become "missing
+  points" that go through a slower fix-up path. Uniform points barely collide (78 of 50k at
+  g=256), but a LiDAR surface cloud is spaced far more finely along the surface than the voxel
+  size, so at g=256 it loses 4 847 of 50 000 points and then stalls *before* the first
+  star-consistency iteration. At g=512 the collisions drop to 1 100 and it finishes:
+  0.76 s at 50k, 1.53 s at 100k, differing from CGAL only by co-spherical tie-breaks
+  (Jaccard 0.9993). `g=1024` is not an option: PBA packs each coordinate into 10 bits
+  (`ENCODE(x, y, z) = (x << 20) | (y << 10) | z`, with `0x3ff` reserved as the infinity sentinel),
+  so the packed keys go negative and the run dies in a device assert -- the benchmark clamps the
+  grid to 512. `--tool-timeout` still bounds the remaining cases: a method that stalls is reported
+  as failed for that dataset and the run continues. `check_gstar4d.py` is how all of this was
+  established, and its `missing=` column is the number to watch.
 - GeoDel is the only CPU-parallel method besides CGAL, and gets the same core count as CGAL parallel
   (`--geodel-threads $SLURM_CPUS_PER_TASK`), so the two are directly comparable.

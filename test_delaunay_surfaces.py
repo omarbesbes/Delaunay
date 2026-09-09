@@ -1919,8 +1919,11 @@ def main():
     ap.add_argument(
         "--gstar4d-grid",
         type=int,
-        default=256,
-        help="gStar4D PBA grid resolution (-g); the point coordinates are scaled into it (default 256)",
+        default=512,
+        help="gStar4D PBA grid resolution (-g), a power of two, at most 512 (default 512).  Its "
+        "voxels are what seeds the initial stars, one point per voxel: 256 is too coarse for a "
+        "surface cloud (10-18%% of the points end up sharing voxels and it then stalls), and 1024 "
+        "overflows PBA's 10-bit-per-coordinate packing",
     )
     ap.add_argument(
         "--tool-timeout",
@@ -1964,6 +1967,14 @@ def main():
     geodel_threads = args.geodel_threads or int(
         os.environ.get("SLURM_CPUS_PER_TASK") or os.environ.get("CGAL_THREADS") or 0
     )
+    if args.gstar4d_grid > 512:
+        # ENCODE(x, y, z) = (x << 20) | (y << 10) | z in PBA/pba3D.h: 10 bits per coordinate, with
+        # 0x3ff reserved as the infinity sentinel, so 1024 makes the packed keys go negative and
+        # the run dies in a device assert (kerRemoveValueFromKey).
+        print(
+            f"gStar4D grid {args.gstar4d_grid} exceeds what PBA's 10-bit packing supports; using 512"
+        )
+        args.gstar4d_grid = 512
     gstar4d_bin = args.gstar4d_bin
     if gstar4d_bin and not os.path.exists(gstar4d_bin):
         print(f"gStar4D binary not found: {gstar4d_bin}; skipping it")

@@ -162,7 +162,7 @@ DATASETS="--no-analytic --models"
 COMMON="--unit-cube --repeats $REPEATS --slow-repeats 2 --slow-threshold 100 --verbose \
   --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
   --geodel auto --geodel-threads $SLURM_CPUS_PER_TASK --tool-timeout $TOOL_TIMEOUT \
-  --gstar4d-grid ${GSTAR4D_GRID:-256} \
+  --gstar4d-grid ${GSTAR4D_GRID:-512} \
   --ply data/*.ply $DATASETS"
 
 echo "== warm-up: JIT-compile Paragram's CUDA extension"

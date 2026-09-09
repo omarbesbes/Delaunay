@@ -175,9 +175,11 @@ def main() -> int:
         "--grid",
         type=int,
         nargs="+",
-        default=[256],
-        help="gStar4D PBA grid sizes to try (-g, default 256); the grid seeds the initial stars, so "
-        "a finer one can help on a non-uniform cloud (512^3 costs ~1 GB of VRAM, 1024^3 ~9 GB)",
+        default=[512],
+        help="gStar4D PBA grid sizes to try (-g, default 512); the grid seeds the initial stars, "
+        "one point per voxel, so a finer one helps on a non-uniform cloud.  512 is the maximum: "
+        "PBA packs each coordinate into 10 bits with 0x3ff reserved, so 1024 dies in a device "
+        "assert (512^3 costs ~1 GB of VRAM)",
     )
     ap.add_argument(
         "--jitter",
