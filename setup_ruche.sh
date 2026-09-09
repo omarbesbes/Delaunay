@@ -12,7 +12,7 @@ ARCHS=${TORCH_CUDA_ARCH_LIST:-"7.0;8.0"}       # V100 (gpu, gpu_test) and A100 (
 
 echo "== [1/7] conda environment: $ENV"
 module purge
-module load anaconda3/2023.09-0/none-none
+set +u; module load anaconda3/2023.09-0/none-none; set -u
 export CONDA_PKGS_DIRS=$WORKDIR/.conda/pkgs      # keep the 50 GB home quota free
 mkdir -p "$CONDA_PKGS_DIRS"
 if [ ! -d "$ENV" ]; then
@@ -20,7 +20,11 @@ if [ ! -d "$ENV" ]; then
     python=3.12 "cuda-toolkit=12.8" "cuda-nvcc=12.8" gxx_linux-64=13 gcc_linux-64=13 \
     cmake ninja tbb tbb-devel gmp mpfr cgal-cpp boost-cpp git
 fi
+# conda activation scripts (cuda-nvcc) read variables that may be unset: relax "set -u" around them
+export NVCC_PREPEND_FLAGS="${NVCC_PREPEND_FLAGS:-}" NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:-}"
+set +u
 source activate "$ENV"
+set -u
 export CUDA_HOME=$CONDA_PREFIX
 export TORCH_CUDA_ARCH_LIST=$ARCHS
 export CC=${CC:-x86_64-conda-linux-gnu-gcc}

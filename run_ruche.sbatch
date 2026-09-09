@@ -13,10 +13,13 @@
 #         REPEATS=5 sbatch run_ruche.sbatch
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
-module purge
-module load anaconda3/2023.09-0/none-none
+set +u; module purge; module load anaconda3/2023.09-0/none-none; set -u
 ENV=${DELAUNAY_ENV:-$WORKDIR/envs/delaunay}
+# conda activation scripts (cuda-nvcc) read variables that may be unset: relax "set -u" around them
+export NVCC_PREPEND_FLAGS="${NVCC_PREPEND_FLAGS:-}" NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:-}"
+set +u
 source activate "$ENV"
+set -u
 export CUDA_HOME=$CONDA_PREFIX
 export CC=${CC:-x86_64-conda-linux-gnu-gcc}
 export CXX=${CXX:-x86_64-conda-linux-gnu-g++}
