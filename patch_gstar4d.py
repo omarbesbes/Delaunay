@@ -1,10 +1,13 @@
 """Make gStar4D (https://github.com/ashwin/gStar4D) build with CUDA 12 and emit parsable output.
 
-    python patch_gstar4d.py /path/to/gStar4D                        # patch sources (idempotent)
-    python patch_gstar4d.py /path/to/gStar4D --build --arch=70,80    # ... and print the build commands
+    python patch_gstar4d.py /path/to/gStar4D                              # patch sources (idempotent)
+    python patch_gstar4d.py /path/to/gStar4D --build --arch=70,80          # ... print the build commands
+    python patch_gstar4d.py /path/to/gStar4D --build --run --arch=70,80    # ... and run them
 
 `--arch` takes a comma-separated list of GPU architectures, `--out=` names the binary and `--cc=`
-the C compiler used for Shewchuk's predicates (default: $CC).
+the C compiler used for Shewchuk's predicates (default: $CC).  Prefer `--run` over piping the
+printed commands into a shell: it runs them in order, in this process, and checks that each output
+file was actually produced.
 
 gStar4D is from 2013 and needs three things before it can be used in this benchmark:
 
@@ -56,6 +59,8 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
+import subprocess
 import sys
 
 TEX_DECLS = "texture<int> pbaTexColor; \ntexture<int> pbaTexLinks; \ntexture<short> pbaTexPointer; \n"
@@ -218,6 +223,22 @@ def build_commands(
     ]
 
 
+def run_build(commands: list[str]) -> bool:
+    """Run the build commands in order, echoing each one, and stop at the first failure."""
+    for cmd in commands:
+        print(f"\n+ {cmd}", flush=True)
+        argv = shlex.split(cmd)
+        rc = subprocess.run(argv, check=False).returncode
+        if rc != 0:
+            print(f"FAILED (exit {rc}): {argv[0]}")
+            return False
+        target = argv[argv.index("-o") + 1] if "-o" in argv else None
+        if target and not os.path.exists(target):
+            print(f"FAILED: {argv[0]} exited 0 but did not produce {target}")
+            return False
+    return True
+
+
 def patch(root: str) -> bool:
     ok = True
 
@@ -303,5 +324,9 @@ if __name__ == "__main__":
             (a.split("=", 1)[1] for a in argv if a.startswith("--cc=")),
             os.environ.get("CC", "cc"),
         )
-        print("\n".join(build_commands(root, arch, out, cc)))
+        commands = build_commands(root, arch, out, cc)
+        if "--run" in argv:
+            good = good and run_build(commands)
+        else:
+            print("\n".join(commands))
     sys.exit(0 if good else 1)
