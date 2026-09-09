@@ -61,12 +61,17 @@ echo "== scaling sweep: sizes [$SIZES], jitters [$JITTERS], methods [$METHODS]"
 # times with --resume, which keeps the measurements already written and marks the input that
 # killed the previous process as failed instead of running into it again.
 ATTEMPTS=${ATTEMPTS:-4}
+ATTEMPT_TIMEOUT=${ATTEMPT_TIMEOUT:-5400}     # per attempt, seconds: a hang cannot eat the job
+MEASURE_TIMEOUT=${MEASURE_TIMEOUT:-300}      # per isolated measurement (gDel3D hung for 13 min)
 for m in $METHODS; do
   for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "-- $m (attempt $attempt/$ATTEMPTS)"
     rc=0
-    python scaling_study.py --ply $CLOUD --sizes $SIZES --jitter $JITTERS --methods "$m" \
-      --repeats "$REPEATS" --threads "$SLURM_CPUS_PER_TASK" --resume \
+    # `timeout` is a backstop: --measure-timeout already bounds the isolated methods, this
+    # catches a hang anywhere else (124 = the attempt was killed by it).
+    timeout "$ATTEMPT_TIMEOUT" python scaling_study.py --ply $CLOUD --sizes $SIZES \
+      --jitter $JITTERS --methods "$m" --repeats "$REPEATS" --threads "$SLURM_CPUS_PER_TASK" \
+      --resume --measure-timeout "$MEASURE_TIMEOUT" \
       --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
       --json "$OUT/scaling-$m.json" 2>&1 | tee -a "$OUT/scaling-$m.log" || rc=$?
     [ "$rc" = 0 ] && break

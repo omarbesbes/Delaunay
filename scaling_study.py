@@ -28,6 +28,7 @@ import json
 import math
 import os
 import statistics
+import subprocess
 import sys
 import time
 
@@ -228,8 +229,76 @@ def run_once(method: str, pts: np.ndarray, args) -> dict:
     raise ValueError(f"unknown method {method}")
 
 
+def measure_in_child(method: str, pts: np.ndarray, args) -> dict:
+    """Same as measure(), but in a separate interpreter with a hard wall-clock limit.
+
+    gDel3D has segfaulted, aborted and hung on individual inputs of these clouds; none of that can
+    be caught in-process, and a hang blocks every method queued behind it.  The points go through
+    a temporary .npy file and the result comes back as JSON."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        npy, out = os.path.join(d, "points.npy"), os.path.join(d, "result.json")
+        np.save(npy, pts)
+        cmd = [
+            sys.executable,
+            os.path.abspath(__file__),
+            "--child",
+            method,
+            "--child-npy",
+            npy,
+            "--child-out",
+            out,
+            "--repeats",
+            str(args.repeats),
+            "--slow-threshold",
+            str(args.slow_threshold),
+            "--threads",
+            str(args.threads),
+            "--device",
+            args.device,
+            "--paragram-bbox-pad",
+            str(args.paragram_bbox_pad),
+            "--repair",
+            args.repair,
+            "--gstar4d-bin",
+            args.gstar4d_bin or "",
+            "--gstar4d-grid",
+            str(args.gstar4d_grid),
+            "--dewall-bin",
+            args.dewall_bin or "",
+            "--cgal-bin",
+            args.cgal_bin or "",
+            "--tool-timeout",
+            str(args.tool_timeout),
+        ]
+        try:
+            r = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=args.measure_timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"{method} did not finish within --measure-timeout "
+                f"{args.measure_timeout:.0f}s and was killed (it hung inside the library)"
+            ) from exc
+        if r.returncode != 0 or not os.path.exists(out):
+            sig = {134: "SIGABRT", 139: "SIGSEGV", -6: "SIGABRT", -11: "SIGSEGV"}
+            why = sig.get(r.returncode, f"exit {r.returncode}")
+            raise RuntimeError(
+                f"{method} crashed the interpreter ({why}): {(r.stdout + r.stderr)[-300:]}"
+            )
+        with open(out) as fh:
+            return json.load(fh)
+
+
 def measure(method: str, pts: np.ndarray, args) -> dict:
     """Warm-up, then `--repeats` timed runs (fewer if the first is slow)."""
+    if method in (args.isolate or []) and not args.child:
+        return measure_in_child(method, pts, args)
     run_once(method, pts, args)  # warm-up: JIT, clocks, first-touch page faults
     reps = args.repeats
     first = run_once(method, pts, args)
@@ -561,6 +630,23 @@ def main() -> int:
         "--cgal-bin", default=os.environ.get("CGAL_DELAUNAY_BIN", "bin/cgal_delaunay")
     )
     ap.add_argument("--tool-timeout", type=float, default=120.0)
+    ap.add_argument(
+        "--isolate",
+        nargs="*",
+        default=["gdel3d"],
+        help="run these methods in a separate interpreter with a wall-clock limit, so that a "
+        "crash or a hang inside the library costs one measurement instead of the sweep "
+        "(default: gdel3d, which has segfaulted, aborted and hung on single inputs)",
+    )
+    ap.add_argument(
+        "--measure-timeout",
+        type=float,
+        default=300.0,
+        help="seconds a single isolated measurement may take before it is killed (default 300)",
+    )
+    ap.add_argument("--child", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--child-npy", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--child-out", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--json", default="results/scaling.json")
     ap.add_argument("--csv", default=None, help="also write the records as CSV")
@@ -578,6 +664,14 @@ def main() -> int:
         help="skip the sweep and plot these JSON files (several are merged, e.g. one per method)",
     )
     args = ap.parse_args()
+
+    if args.child:  # one isolated measurement, called by measure_in_child()
+        if args.cgal_bin and os.path.exists(args.cgal_bin):
+            os.environ["CGAL_DELAUNAY_BIN"] = args.cgal_bin
+        res = measure(args.child, np.load(args.child_npy), args)
+        with open(args.child_out, "w") as fh:
+            json.dump(res, fh)
+        return 0
 
     if args.plot_only:
         runs, envs = [], {}

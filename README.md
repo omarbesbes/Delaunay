@@ -132,6 +132,11 @@ Two things to know about the sizes:
 * A method that fails, times out, or exceeds `--skip-above` (default 60 s) at some size is not
   measured at larger sizes, and its records say so. That keeps CGAL sequential and Paragram's
   global-CGAL repair from consuming the whole job at 1M points.
+* **gDel3D is measured in a separate interpreter with a wall-clock limit** (`--isolate gdel3d
+  --measure-timeout 300`), because it has failed in all three ways that cannot be caught in
+  process: a segfault at 22k points, an abort on `torus-random`, and a 13-minute hang at 42k that
+  blocked every method queued behind it. Each such failure now costs one measurement. Both jobs
+  additionally wrap every attempt in `timeout` (`ATTEMPT_TIMEOUT`, `PASS_TIMEOUT`) as a backstop.
 * **Each method sweeps in its own process** (`scaling-<method>.json`, merged for the plot), because
   a library can crash the interpreter rather than raise: gDel3D has been seen to segfault on a
   22k-point subsample after handling 2k, 12k and 100k fine. Every measurement is marked in the

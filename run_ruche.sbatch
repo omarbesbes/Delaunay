@@ -184,14 +184,17 @@ python -c "import torch, paragram; d = paragram.voronoi_diagram(torch.rand(10000
 # therefore restarted up to ATTEMPTS times with --resume: finished datasets are kept and the
 # measurement that killed the process is skipped.
 ATTEMPTS=${ATTEMPTS:-4}
+PASS_TIMEOUT=${PASS_TIMEOUT:-7200}    # per attempt, seconds
 run_pass() {  # run_pass <log-name> <json> <extra args...>
   local name=$1 json=$2
   shift 2
   for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "-- $name (attempt $attempt/$ATTEMPTS)"
     local rc=0
-    python test_delaunay_surfaces.py $COMMON "$@" --resume --json "$json" 2>&1 \
-      | tee -a "$OUT/$name.log" || rc=$?
+    # `timeout` bounds an attempt that hangs instead of crashing (gDel3D has done both);
+    # --resume then continues past the measurement that was killed.  124 = killed by timeout.
+    timeout "$PASS_TIMEOUT" python test_delaunay_surfaces.py $COMMON "$@" --resume \
+      --json "$json" 2>&1 | tee -a "$OUT/$name.log" || rc=$?
     [ "$rc" = 0 ] && return 0
     # 134 = SIGABRT, 139 = SIGSEGV: the library killed the interpreter, not an exception
     echo "   $name: the process died (exit $rc); resuming without that measurement"
