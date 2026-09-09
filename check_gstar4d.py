@@ -95,12 +95,17 @@ def case(
     timeout: float,
     ref: bool,
     jitter: float = 0.0,
-    rng: np.random.Generator | None = None,
+    seed: int = 0,
+    repeat: int = 1,
 ) -> bool:
-    """Run the benchmark's own runner, then compare against the reference on its point set."""
+    """Run the benchmark's own runner, then compare against the reference on its point set.
+
+    The perturbation is derived from (seed, n, jitter), so the same case is the same point set
+    on every repetition and in every grid column: a case that finishes once and hangs the next
+    time is a non-deterministic stall, not a property of that particular perturbation."""
     if jitter > 0:  # same convention as test_delaunay_surfaces.py --jitter
-        rng = rng or np.random.default_rng(0)
-        points = points + rng.normal(
+        jrng = np.random.default_rng([seed, len(points), int(jitter * 1e12)])
+        points = points + jrng.normal(
             scale=jitter * np.ptp(points, axis=0).max(), size=points.shape
         )
     print(
@@ -108,14 +113,29 @@ def case(
         end="",
         flush=True,
     )
-    try:
-        tets, secs, info = T.run_gstar4d(
-            points, binary, grid_size=grid, timeout=timeout, verbose=True
+    runs, fail = [], ""
+    for _ in range(repeat):
+        try:
+            tets, secs, info = T.run_gstar4d(
+                points, binary, grid_size=grid, timeout=timeout, verbose=True
+            )
+            runs.append((tets, secs, info))
+        except Exception as exc:  # noqa: BLE001 - this is the thing being tested
+            fail = str(exc)
+            break
+    if repeat > 1:
+        print(f"{len(runs)}/{repeat} finished  ", end="")
+        if runs:
+            print(
+                f"[{', '.join(f'{s:.2f}s/{i.get("consistency_loops", "?")}loops' for _, s, i in runs)}]  ",
+                end="",
+            )
+    if not runs or fail:
+        print(
+            f"FAILED: {fail if len(fail) <= 420 else fail[:210] + ' ... ' + fail[-210:]}"
         )
-    except Exception as exc:  # noqa: BLE001 - this is the thing being tested
-        msg = str(exc)
-        print(f"FAILED: {msg if len(msg) <= 420 else msg[:210] + ' ... ' + msg[-210:]}")
         return False
+    tets, secs, info = runs[0]
     msg = (
         f"OK  {secs:7.3f}s  tets={len(tets):<8d} loops={info.get('consistency_loops', '?'):<4} "
         f"match={info['max_match_dist']:.0e} dropped={info['dropped_duplicate_points']}"
@@ -171,6 +191,13 @@ def main() -> int:
     )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="run each case this many times on the SAME points: 'k/N finished' distinguishes a "
+        "non-deterministic stall from an input the method cannot do (default 1)",
+    )
+    ap.add_argument(
         "--no-reference", action="store_true", help="skip the comparison, time only"
     )
     args = ap.parse_args()
@@ -184,7 +211,6 @@ def main() -> int:
         f"binary: {os.path.abspath(args.bin)}   grids: {args.grid}   jitters: {args.jitter}   "
         f"timeout: {args.timeout:.0f}s/case\n"
     )
-    rng = np.random.default_rng(args.seed)
     ok = True
 
     print("[1] the tool's own uniform points (tests the build, not this benchmark)")
@@ -192,7 +218,7 @@ def main() -> int:
 
     print("\n[2] uniform random points through the benchmark's runner")
     for n in args.sizes:
-        pts = rng.random((n, 3))
+        pts = np.random.default_rng([args.seed, n]).random((n, 3))
         for grid in args.grid:
             for jit in args.jitter:
                 ok &= case(
@@ -203,7 +229,8 @@ def main() -> int:
                     args.timeout,
                     not args.no_reference,
                     jit,
-                    rng,
+                    args.seed,
+                    args.repeat,
                 )
 
     for path in args.ply:
@@ -211,10 +238,12 @@ def main() -> int:
         cloud = T.unit_cube(T.load_ply_vertices(path))
         print(f"\n[3] {name} ({len(cloud)} points), subsampled")
         for n in [s for s in args.sizes if s < len(cloud)] + [len(cloud)]:
+            # the same subsample for every grid and jitter, so the columns are comparable
+            srng = np.random.default_rng([args.seed, n])
             sub = (
                 cloud
                 if n == len(cloud)
-                else cloud[rng.choice(len(cloud), n, replace=False)]
+                else cloud[srng.choice(len(cloud), n, replace=False)]
             )
             for grid in args.grid:
                 for jit in args.jitter:
@@ -226,7 +255,8 @@ def main() -> int:
                         args.timeout,
                         not args.no_reference,
                         jit,
-                        rng,
+                        args.seed,
+                        args.repeat,
                     )
 
     print(
