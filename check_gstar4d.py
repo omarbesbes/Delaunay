@@ -73,13 +73,18 @@ def stage1(binary: str, n: int, grid: int, timeout: float) -> bool:
         return False
     loops = re.findall(r"^Loop:\s*(\d+)\s*$", r.stdout, re.MULTILINE)
     total = re.search(r"^\s*Total Time:\s*([0-9.eE+-]+)\s*$", r.stdout, re.MULTILINE)
-    insphere = "Tetra in-sphere is correct" in r.stdout
+    # gStar4D's own checks: it always prints "Euler Characteristic:" and adds a "... check failed!"
+    # line only when a check fails.
+    insphere = "In-sphere check failed" not in r.stdout
+    euler = "Euler check failed" not in r.stdout
+    orient = "Orientation check failed" not in r.stdout
     print(
         f"OK  {float(total.group(1)) / 1000 if total else secs:7.3f}s  "
         f"loops={int(loops[-1]) + 1 if loops else '?':<4} "
-        f"self-check: in-sphere {'ok' if insphere else 'FAILED'}"
+        f"self-check: in-sphere {'ok' if insphere else 'FAILED'}, "
+        f"Euler {'ok' if euler else 'FAILED'}, orientation {'ok' if orient else 'FAILED'}"
     )
-    return insphere
+    return insphere and euler and orient
 
 
 def case(
