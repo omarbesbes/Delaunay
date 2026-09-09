@@ -111,9 +111,19 @@ for attempt in $(seq 1 6); do
     exit 1
   fi
   if [ "$attempt" = 6 ]; then
-    echo "   FAILED: no usable CUDA context after 1 minute. See $OUT/diagnose_gpu.txt"
-    nvidia-smi --query-gpu=compute_mode,memory.used --format=csv
-    nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+    echo "   FAILED: no usable CUDA context after 1 minute on ${SLURMD_NODENAME:-this node}."
+    echo "   See $OUT/diagnose_gpu.txt for the driver / runtime diagnostics."
+    # Remember the node and resubmit excluding every node that has refused so far, up to RETRY_MAX times.
+    RETRY=${RETRY:-0}
+    RETRY_MAX=${RETRY_MAX:-4}
+    echo "${SLURMD_NODENAME:-unknown}" >> results/unusable_nodes.txt
+    EXCLUDE=$(sort -u results/unusable_nodes.txt | grep -v '^unknown$' | paste -sd, -)
+    if [ "$RETRY" -lt "$RETRY_MAX" ] && [ -n "$EXCLUDE" ]; then
+      echo "   resubmitting with --exclude=$EXCLUDE (retry $((RETRY + 1))/$RETRY_MAX)"
+      sbatch --exclude="$EXCLUDE" --export=ALL,RETRY=$((RETRY + 1)),RETRY_MAX="$RETRY_MAX" run_ruche.sbatch
+    else
+      echo "   giving up after $RETRY retries; inspect $OUT/diagnose_gpu.txt"
+    fi
     exit 1
   fi
   echo "   attempt $attempt/6: device unavailable, waiting 10 s"
