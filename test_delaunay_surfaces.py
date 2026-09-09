@@ -566,6 +566,7 @@ def _cgal_binary(points: np.ndarray, binary: str) -> tuple[np.ndarray, str, dict
     insertion and extraction times, which exclude process start-up and file I/O."""
     import tempfile
 
+    binary = os.path.abspath(binary)
     with tempfile.TemporaryDirectory() as d:
         pin, pout = os.path.join(d, "points.f64"), os.path.join(d, "tets.i32")
         np.ascontiguousarray(points, dtype="<f8").tofile(pin)
@@ -806,6 +807,9 @@ def run_dewall(
 
     n = len(points)
     p32 = np.ascontiguousarray(points, dtype=np.float32)
+    binary = os.path.abspath(
+        binary
+    )  # the tool runs with cwd set to the temporary directory
     with tempfile.TemporaryDirectory() as d:
         pin, prefix = os.path.join(d, "points.txt"), os.path.join(d, "out_")
         with open(pin, "w") as f:
@@ -1753,10 +1757,10 @@ def main():
         t_adj = timing["paragram"]["adjacency_gpu_mean"] + timing["paragram"].get(
             "repair_cpu_mean", 0.0
         )
-        t_par = timing["paragram"]["conversion_gpu_mean"]
 
         hull = ConvexHull(pts)
-        m_par = analyze(pts, par_tets, t_par, hull)
+        # one meaning for the "seconds" metric row: the method's mean total (GPU + CPU) per run
+        m_par = analyze(pts, par_tets, timing["paragram"]["mean"], hull)
         m_ref = analyze(pts, ref, t_ref, hull)
         cmp = compare_sets(par_tets, ref, n)
         adj_np = adjacency.to("cpu", torch.long).numpy()

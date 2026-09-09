@@ -194,21 +194,23 @@ def timing_table(data) -> str:
         "sequential_seconds" in (r.get("reference_info") or {}) for r in data.values()
     )
     hdr = (
-        "| dataset | N | adjacency + repair (s) | voronoi→delaunay (s) | Paragram total (s) | reference (s) "
-        "| speed-up vs ref |"
+        "| dataset | N | adjacency (GPU, s) | repair (CPU, s) | voronoi→delaunay (GPU, s) | Paragram total (s) "
+        "| reference (s) | speed-up vs ref |"
     )
     if seq:
         hdr += " reference 1 thread (s) |"
     for _, lab in ex:
         hdr += f" {lab} (s) | Paragram / {lab} |"
-    rows = [hdr, "|" + "---|" * (7 + (1 if seq else 0) + 2 * len(ex))]
+    rows = [hdr, "|" + "---|" * (8 + (1 if seq else 0) + 2 * len(ex))]
     for name, r in data.items():
-        adj = r.get("adjacency_seconds", float("nan"))
-        conv = primary(r)["seconds"]
+        t = (r.get("timing") or {}).get("paragram") or {}
+        adj = t.get("adjacency_gpu_mean", r.get("adjacency_seconds", float("nan")))
+        repair = t.get("repair_cpu_mean", 0.0)
+        conv = t.get("conversion_gpu_mean", primary(r)["seconds"])
         ref = r["ref"]["seconds"]
-        tot = adj + conv
+        tot = t.get("mean", adj + repair + conv)
         line = (
-            f"| {name} | {r['n']} | {f(adj)} | {f(conv)} | {f(tot)} | {f(ref)} | "
+            f"| {name} | {r['n']} | {f(adj)} | {f(repair)} | {f(conv)} | {f(tot)} | {f(ref)} | "
             f"{f(ref / tot if tot else float('nan'), 2)}x |"
         )
         if seq:
