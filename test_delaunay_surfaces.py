@@ -81,6 +81,35 @@ def summarize_runs(runs: list[dict]) -> dict:
     return out
 
 
+TIMING_LABELS = {
+    "paragram": "paragram",
+    "gdel3d": "gdel3d",
+    "dewall": "dewall",
+    "cgal_parallel": "cgal parallel",
+    "cgal_sequential": "cgal sequential",
+}
+
+
+def format_timing_table(timing: dict, indent: str = "   ") -> str:
+    """Per-method wall time over the repeated runs plus the CPU / GPU split and phase breakdown."""
+    lines = [
+        f"{indent}timing over repeated runs (seconds):",
+        f"{indent}  {'method':16s} {'runs':>4s} {'mean':>9s} {'std':>8s} {'min':>9s} {'GPU':>9s} {'CPU':>9s}  breakdown",
+    ]
+    for label in ("paragram", "gdel3d", "dewall", "cgal_parallel", "cgal_sequential"):
+        t = timing.get(label)
+        if not t:
+            continue
+        gpu = t.get("gpu_mean")
+        cpu = t.get("cpu_mean")
+        lines.append(
+            f"{indent}  {TIMING_LABELS[label]:16s} {t['runs']:4d} {t['mean']:9.4f} {t['std']:8.4f} {t['min']:9.4f} "
+            f"{(f'{gpu:9.4f}' if gpu is not None else '        -')} "
+            f"{(f'{cpu:9.4f}' if cpu is not None else '        -')}  {t.get('breakdown', '')}"
+        )
+    return "\n".join(lines)
+
+
 def unit_cube(points: np.ndarray) -> np.ndarray:
     """Local-DeWall's normalisation: (p - min) / (largest extent * 1.001), i.e. into [0, 1/1.001]^3.
     Applied to every dataset up front (--unit-cube) so that all methods see the same float32 points."""
@@ -89,9 +118,7 @@ def unit_cube(points: np.ndarray) -> np.ndarray:
     return (points - lo) / maxside
 
 
-MODEL_URL = (
-    "https://raw.githubusercontent.com/alecjacobson/common-3d-test-models/master/data/{}.obj"
-)
+MODEL_URL = "https://raw.githubusercontent.com/alecjacobson/common-3d-test-models/master/data/{}.obj"
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "paragram_test_models")
 DEFAULT_MODELS = ["stanford-bunny", "spot", "teapot", "cow", "suzanne", "armadillo"]
 
@@ -126,7 +153,9 @@ def fibonacci_sphere(n: int) -> np.ndarray:
     i = np.arange(n) + 0.5
     phi = np.arccos(1 - 2 * i / n)
     theta = np.pi * (1 + 5**0.5) * i
-    return np.stack([np.cos(theta) * np.sin(phi), np.sin(theta) * np.sin(phi), np.cos(phi)], 1)
+    return np.stack(
+        [np.cos(theta) * np.sin(phi), np.sin(theta) * np.sin(phi), np.cos(phi)], 1
+    )
 
 
 def random_sphere(n: int, rng) -> np.ndarray:
@@ -136,13 +165,19 @@ def random_sphere(n: int, rng) -> np.ndarray:
 
 def torus(u, v, R=1.0, r=0.4) -> np.ndarray:
     return np.stack(
-        [(R + r * np.cos(v)) * np.cos(u), (R + r * np.cos(v)) * np.sin(u), r * np.sin(v)], 1
+        [
+            (R + r * np.cos(v)) * np.cos(u),
+            (R + r * np.cos(v)) * np.sin(u),
+            r * np.sin(v),
+        ],
+        1,
     )
 
 
 def torus_grid(nu: int, nv: int) -> np.ndarray:
     u, v = np.meshgrid(
-        np.linspace(0, 2 * np.pi, nu, endpoint=False), np.linspace(0, 2 * np.pi, nv, endpoint=False)
+        np.linspace(0, 2 * np.pi, nu, endpoint=False),
+        np.linspace(0, 2 * np.pi, nv, endpoint=False),
     )
     return torus(u.ravel(), v.ravel())
 
@@ -156,7 +191,12 @@ def klein_bottle(n: int, rng, a=2.0) -> np.ndarray:  # figure-8 immersion
     v = rng.uniform(0, 2 * np.pi, n)
     w = a + np.cos(u / 2) * np.sin(v) - np.sin(u / 2) * np.sin(2 * v)
     return np.stack(
-        [w * np.cos(u), w * np.sin(u), np.sin(u / 2) * np.sin(v) + np.cos(u / 2) * np.sin(2 * v)], 1
+        [
+            w * np.cos(u),
+            w * np.sin(u),
+            np.sin(u / 2) * np.sin(v) + np.cos(u / 2) * np.sin(2 * v),
+        ],
+        1,
     )
 
 
@@ -169,9 +209,17 @@ def mobius(n: int, rng) -> np.ndarray:
 
 def trefoil_tube(n: int, rng, r=0.35) -> np.ndarray:
     t = rng.uniform(0, 2 * np.pi, n)
-    c = np.stack([np.sin(t) + 2 * np.sin(2 * t), np.cos(t) - 2 * np.cos(2 * t), -np.sin(3 * t)], 1)
+    c = np.stack(
+        [np.sin(t) + 2 * np.sin(2 * t), np.cos(t) - 2 * np.cos(2 * t), -np.sin(3 * t)],
+        1,
+    )
     tan = np.stack(
-        [np.cos(t) + 4 * np.cos(2 * t), -np.sin(t) + 4 * np.sin(2 * t), -3 * np.cos(3 * t)], 1
+        [
+            np.cos(t) + 4 * np.cos(2 * t),
+            -np.sin(t) + 4 * np.sin(2 * t),
+            -3 * np.cos(3 * t),
+        ],
+        1,
     )
     tan /= np.linalg.norm(tan, axis=1, keepdims=True)
     ref = np.where(np.abs(tan[:, :1]) < 0.9, [[1.0, 0, 0]], [[0, 1.0, 0]])
@@ -258,7 +306,9 @@ def load_ply_vertices(path: str) -> np.ndarray:
                 if name == "vertex":
                     names = [p[0] for p in props]
                     ix, iy, iz = names.index("x"), names.index("y"), names.index("z")
-                    verts = np.array([[float(r[ix]), float(r[iy]), float(r[iz])] for r in rows])
+                    verts = np.array(
+                        [[float(r[ix]), float(r[iy]), float(r[iz])] for r in rows]
+                    )
             if verts is None:
                 raise ValueError(f"{path}: no vertex element")
             return verts
@@ -266,7 +316,9 @@ def load_ply_vertices(path: str) -> np.ndarray:
         for name, count, props in elements:
             if any(p[0] == "list" for p in props):
                 if name == "vertex":
-                    raise ValueError(f"{path}: list properties on vertices are not supported")
+                    raise ValueError(
+                        f"{path}: list properties on vertices are not supported"
+                    )
                 for _ in range(count):  # variable-length records (faces): walk them
                     for p in props:
                         if p[0] == "list":
@@ -280,7 +332,9 @@ def load_ply_vertices(path: str) -> np.ndarray:
             dt = np.dtype([(p[0], endian + PLY_TYPES[p[1]]) for p in props])
             data = np.frombuffer(f.read(count * dt.itemsize), dt)
             if name == "vertex":
-                verts = np.stack([data["x"], data["y"], data["z"]], 1).astype(np.float64)
+                verts = np.stack([data["x"], data["y"], data["z"]], 1).astype(
+                    np.float64
+                )
         if verts is None:
             raise ValueError(f"{path}: no vertex element")
         return verts
@@ -325,9 +379,21 @@ def build_datasets(args) -> list[tuple[str, np.ndarray, str]]:
                 hollow_cube(2000, rng),
                 "2000 points on the faces of [-1,1]^3 (co-planar faces)",
             ),
-            ("sphere-fibonacci", fibonacci_sphere(args.n), "co-spherical up to float32 rounding"),
-            ("sphere-random", random_sphere(args.n, rng), "co-spherical up to float32 rounding"),
-            ("torus-grid", torus_grid(120, 60), "regular grid: many co-circular points"),
+            (
+                "sphere-fibonacci",
+                fibonacci_sphere(args.n),
+                "co-spherical up to float32 rounding",
+            ),
+            (
+                "sphere-random",
+                random_sphere(args.n, rng),
+                "co-spherical up to float32 rounding",
+            ),
+            (
+                "torus-grid",
+                torus_grid(120, 60),
+                "regular grid: many co-circular points",
+            ),
             ("torus-random", torus_random(args.n, rng), "generic"),
             ("klein-bottle", klein_bottle(args.n, rng), "generic"),
             ("mobius", mobius(args.n, rng), "generic"),
@@ -342,7 +408,10 @@ def build_datasets(args) -> list[tuple[str, np.ndarray, str]]:
                     "mesh vertices (symmetric/regular meshes contain co-spherical groups)",
                 )
             )
-        except (OSError, ValueError) as exc:  # network / parse failure should not kill the run
+        except (
+            OSError,
+            ValueError,
+        ) as exc:  # network / parse failure should not kill the run
             print(f"  skipping {m}: {exc}")
     return ds
 
@@ -386,7 +455,9 @@ def status_histogram(status: torch.Tensor | None) -> dict[str, int] | None:
     """Per-cell Paragram status counts (see Status enum in voronoi_convex_cell.cuh)."""
     if status is None:
         return None
-    h = torch.bincount(status.to("cpu", torch.long).clamp(min=0), minlength=len(STATUS_NAMES))
+    h = torch.bincount(
+        status.to("cpu", torch.long).clamp(min=0), minlength=len(STATUS_NAMES)
+    )
     out = {name: int(h[i]) for i, name in enumerate(STATUS_NAMES)}
     extra = int(h[len(STATUS_NAMES) :].sum())
     if extra:
@@ -395,7 +466,10 @@ def status_histogram(status: torch.Tensor | None) -> dict[str, int] | None:
 
 
 def voronoi_adjacency(
-    points32: torch.Tensor, backend: str, ref_tets: np.ndarray | None, bbox_pad: float | None = None
+    points32: torch.Tensor,
+    backend: str,
+    ref_tets: np.ndarray | None,
+    bbox_pad: float | None = None,
 ):
     """(adjacency, offsets, status, backend_name).
 
@@ -428,7 +502,9 @@ def voronoi_adjacency(
                 )
             raise
         label = "paragram" + (
-            f" (bbox_pad={bbox_pad:g}x extent)" if kwargs else " (legacy box: +1.0 absolute)"
+            f" (bbox_pad={bbox_pad:g}x extent)"
+            if kwargs
+            else " (legacy box: +1.0 absolute)"
         )
         return d.adjacency, d.offsets, d.status, label
     if backend == "ref-edges":
@@ -494,7 +570,9 @@ def _cgal_binary(points: np.ndarray, binary: str) -> tuple[np.ndarray, str, dict
         pin, pout = os.path.join(d, "points.f64"), os.path.join(d, "tets.i32")
         np.ascontiguousarray(points, dtype="<f8").tofile(pin)
         t0 = time.perf_counter()
-        r = subprocess.run([binary, pin, pout], check=True, capture_output=True, text=True)
+        r = subprocess.run(
+            [binary, pin, pout], check=True, capture_output=True, text=True
+        )
         wall = time.perf_counter() - t0
         tets = np.fromfile(pout, dtype="<i4").reshape(-1, 4).astype(np.int64)
     info = {"wall_seconds": wall}
@@ -528,10 +606,14 @@ def reference_delaunay(points: np.ndarray) -> tuple[np.ndarray, str, dict]:
     if binary:
         t0 = time.perf_counter()
         tets, label, info = _cgal_binary(points, binary)
-        info["seconds"] = info.get("build_seconds", 0.0) + info.get("extract_seconds", 0.0) or (
-            time.perf_counter() - t0
-        )
-        if info.get("parallel") and info.get("threads", 1) > 1 and "CGAL_THREADS" not in os.environ:
+        info["seconds"] = info.get("build_seconds", 0.0) + info.get(
+            "extract_seconds", 0.0
+        ) or (time.perf_counter() - t0)
+        if (
+            info.get("parallel")
+            and info.get("threads", 1) > 1
+            and "CGAL_THREADS" not in os.environ
+        ):
             # CGAL's parallel insertion can be *slower* than one thread on surface point clouds
             # (lock-grid contention), so also time a single-threaded build for reference.
             os.environ["CGAL_THREADS"] = "1"
@@ -548,7 +630,11 @@ def reference_delaunay(points: np.ndarray) -> tuple[np.ndarray, str, dict]:
         import CGAL.CGAL_Triangulation_3  # noqa: F401
 
         tets = _cgal_in_process(points)
-        return tets, "CGAL sequential [python bindings]", {"seconds": time.perf_counter() - t0}
+        return (
+            tets,
+            "CGAL sequential [python bindings]",
+            {"seconds": time.perf_counter() - t0},
+        )
     except ImportError:
         pass
     cgal_python = os.environ.get("CGAL_PYTHON")
@@ -560,7 +646,11 @@ def reference_delaunay(points: np.ndarray) -> tuple[np.ndarray, str, dict]:
             {"seconds": time.perf_counter() - t0},
         )
     tets = Delaunay(points).simplices.astype(np.int64)
-    return tets, "scipy.Delaunay (CGAL not installed)", {"seconds": time.perf_counter() - t0}
+    return (
+        tets,
+        "scipy.Delaunay (CGAL not installed)",
+        {"seconds": time.perf_counter() - t0},
+    )
 
 
 def gdel3d_available() -> bool:
@@ -635,9 +725,13 @@ def run_gdel3d(points: np.ndarray) -> tuple[np.ndarray, float, dict]:
             keep &= alive
             info["dead_filter"] = "tet_info"
         else:
-            info["dead_filter"] = f"tet_info length mismatch ({len(alive)} vs {len(raw)})"
+            info["dead_filter"] = (
+                f"tet_info length mismatch ({len(alive)} vs {len(raw)})"
+            )
     else:
-        info["dead_filter"] = "unavailable (pyGDel3D not patched; dead tets are included)"
+        info["dead_filter"] = (
+            "unavailable (pyGDel3D not patched; dead tets are included)"
+        )
     tets = np.unique(np.sort(raw[keep], axis=1), axis=0)
     info["duplicate_tets"] = int(keep.sum() - len(tets))
     if hasattr(
@@ -647,7 +741,9 @@ def run_gdel3d(points: np.ndarray) -> tuple[np.ndarray, float, dict]:
         info["stats_ms"] = st
         gpu_keys = ("initTime", "splitTime", "flipTime", "relocateTime", "sortTime")
         info["gpu_seconds"] = sum(st.get(k, 0.0) for k in gpu_keys) / 1000.0
-        info["cpu_seconds"] = (st.get("splayingTime", 0.0) + st.get("outTime", 0.0)) / 1000.0
+        info["cpu_seconds"] = (
+            st.get("splayingTime", 0.0) + st.get("outTime", 0.0)
+        ) / 1000.0
     try:  # gDel3D's own checker (Euler, adjacency, orientation, empty sphere); it skips dead tets
         with _silence_fds():
             info["self_check"] = bool(out.check_correctness(pts))
@@ -666,7 +762,9 @@ def _read_mat(path: str, kind: str) -> np.ndarray:
     if rows * cols == 0:
         return np.zeros((rows, cols), dtype=np.float64 if kind == "f" else np.int64)
     itemsize = len(payload) // (rows * cols)
-    dt = {("f", 4): "<f4", ("f", 8): "<f8", ("i", 4): "<i4", ("i", 8): "<i8"}[(kind, itemsize)]
+    dt = {("f", 4): "<f4", ("f", 8): "<f8", ("i", 4): "<i4", ("i", 8): "<i8"}[
+        (kind, itemsize)
+    ]
     return np.frombuffer(payload, dtype=dt, count=rows * cols).reshape(rows, cols)
 
 
@@ -689,7 +787,9 @@ def run_dewall(
         pin, prefix = os.path.join(d, "points.txt"), os.path.join(d, "out_")
         with open(pin, "w") as f:
             f.write(f"{n}\n")
-            np.savetxt(f, p32, fmt="%.9g")  # 9 significant digits round-trip float32 exactly
+            np.savetxt(
+                f, p32, fmt="%.9g"
+            )  # 9 significant digits round-trip float32 exactly
         cmd = [binary, prefix, pin] + (["--no-normalize"] if prenormalized else [])
         t0 = time.perf_counter()
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=d, check=False)
@@ -870,7 +970,12 @@ def _insphere_margins(points: np.ndarray, t: np.ndarray, k: int = 8) -> np.ndarr
         t1 = lb * np.einsum("ij,ij->i", A_, np.cross(C_, D_))
         t2 = lc * np.einsum("ij,ij->i", A_, np.cross(B_, D_))
         t3 = ld * np.einsum("ij,ij->i", A_, np.cross(B_, C_))
-        bound = la * nb * nc * nd + lb * na * nc * nd + lc * na * nb * nd + ld * na * nb * nc
+        bound = (
+            la * nb * nc * nd
+            + lb * na * nc * nd
+            + lc * na * nb * nd
+            + ld * na * nb * nc
+        )
         with np.errstate(divide="ignore", invalid="ignore"):
             rel = sgn * (-t0 + t1 - t2 + t3) / bound
         rel = np.where(own | ~finite | ~np.isfinite(rel), np.inf, rel)
@@ -881,7 +986,9 @@ def _insphere_margins(points: np.ndarray, t: np.ndarray, k: int = 8) -> np.ndarr
 INSPHERE_TOL = 1e-12  # relative to the rounding-error bound; float64 noise is ~1e-15
 
 
-def analyze(points: np.ndarray, tets: np.ndarray, seconds: float, hull: ConvexHull) -> Metrics:
+def analyze(
+    points: np.ndarray, tets: np.ndarray, seconds: float, hull: ConvexHull
+) -> Metrics:
     n = len(points)
     T = len(tets)
     if T == 0:
@@ -913,8 +1020,12 @@ def analyze(points: np.ndarray, tets: np.ndarray, seconds: float, hull: ConvexHu
     vol = np.abs(np.einsum("ij,ij->i", B, np.cross(C, D))) / 6.0
     bbox = np.ptp(points, axis=0).max()
 
-    faces = np.concatenate([t[:, [1, 2, 3]], t[:, [0, 2, 3]], t[:, [0, 1, 3]], t[:, [0, 1, 2]]])
-    fkeys, fcount = np.unique((faces[:, 0] * n + faces[:, 1]) * n + faces[:, 2], return_counts=True)
+    faces = np.concatenate(
+        [t[:, [1, 2, 3]], t[:, [0, 2, 3]], t[:, [0, 1, 3]], t[:, [0, 1, 2]]]
+    )
+    fkeys, fcount = np.unique(
+        (faces[:, 0] * n + faces[:, 1]) * n + faces[:, 2], return_counts=True
+    )
     pairs = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
     ekeys = np.unique(np.concatenate([t[:, i] * n + t[:, j] for i, j in pairs]))
     V = len(np.unique(t))
@@ -941,7 +1052,10 @@ def analyze(points: np.ndarray, tets: np.ndarray, seconds: float, hull: ConvexHu
         np.cross(b - a, d - a),
         np.cross(c - a, b - a),
     ]  # outward-ish per face
-    normals = [nn / np.maximum(np.linalg.norm(nn, axis=1, keepdims=True), 1e-300) for nn in normals]
+    normals = [
+        nn / np.maximum(np.linalg.norm(nn, axis=1, keepdims=True), 1e-300)
+        for nn in normals
+    ]
     # orient all normals outward using the opposite vertex
     opp = [a, b, c, d]
     base = [b, a, a, a]
@@ -1004,9 +1118,7 @@ def fmt(v):
     return str(v)
 
 
-PARAGRAM_BOX_PAD = (
-    1.0  # voronoi_ultra.cu: cells are clipped to the BVH root bounds -/+ 1.0 (absolute) + 1e-5
-)
+PARAGRAM_BOX_PAD = 1.0  # voronoi_ultra.cu: cells are clipped to the BVH root bounds -/+ 1.0 (absolute) + 1e-5
 
 
 def _face_outside_box(points, ref_t, edge_keys_all, inv, hull_rays, pad) -> np.ndarray:
@@ -1018,13 +1130,17 @@ def _face_outside_box(points, ref_t, edge_keys_all, inv, hull_rays, pad) -> np.n
     same side."""
     o, _ = _circumcentres(points, ref_t)
     lo, hi = points.min(0) - pad, points.max(0) + pad
-    tid = np.repeat(np.arange(len(ref_t)), 6)  # edge keys are flattened tet-major (T, 6)
+    tid = np.repeat(
+        np.arange(len(ref_t)), 6
+    )  # edge keys are flattened tet-major (T, 6)
     m = len(edge_keys_all)
     all_hi = np.ones((m, 3), bool)
     all_lo = np.ones((m, 3), bool)
     np.logical_and.at(all_hi, inv, (o > hi)[tid])
     np.logical_and.at(all_lo, inv, (o < lo)[tid])
-    return ((all_hi & hull_rays[:, :, 0]).any(1)) | ((all_lo & hull_rays[:, :, 1]).any(1))
+    return ((all_hi & hull_rays[:, :, 0]).any(1)) | (
+        (all_lo & hull_rays[:, :, 1]).any(1)
+    )
 
 
 def _hull_ray_constraints(points, tr, ref_edges) -> tuple[np.ndarray, np.ndarray]:
@@ -1033,7 +1149,9 @@ def _hull_ray_constraints(points, tr, ref_edges) -> tuple[np.ndarray, np.ndarray
     has a non-negative (resp. non-positive) component along the axis."""
     n = len(points)
     T = len(tr)
-    faces = np.concatenate([tr[:, [1, 2, 3]], tr[:, [0, 2, 3]], tr[:, [0, 1, 3]], tr[:, [0, 1, 2]]])
+    faces = np.concatenate(
+        [tr[:, [1, 2, 3]], tr[:, [0, 2, 3]], tr[:, [0, 1, 3]], tr[:, [0, 1, 2]]]
+    )
     fk = (faces[:, 0] * n + faces[:, 1]) * n + faces[:, 2]
     _, first, count = np.unique(fk, return_index=True, return_counts=True)
     bidx = first[count == 1]  # one row per boundary face
@@ -1061,7 +1179,14 @@ def _hull_ray_constraints(points, tr, ref_edges) -> tuple[np.ndarray, np.ndarray
 def classify_tets(points: np.ndarray, t: np.ndarray, hull_volume: float) -> dict:
     """Geometric classification of a set of tets: flat, co-spherical tie, violation, clean."""
     if len(t) == 0:
-        return {"count": 0, "volume_frac": 0.0, "flat": 0, "tie": 0, "violation": 0, "clean": 0}
+        return {
+            "count": 0,
+            "volume_frac": 0.0,
+            "flat": 0,
+            "tie": 0,
+            "violation": 0,
+            "clean": 0,
+        }
     a, b, c, d = (points[t[:, i]] for i in range(4))
     vol = np.abs(np.einsum("ij,ij->i", b - a, np.cross(c - a, d - a))) / 6.0
     bbox = np.ptp(points, axis=0).max()
@@ -1130,7 +1255,11 @@ def explain_difference(
     )
     clipped = dict(zip(ref_edges.tolist(), clipped_all.tolist()))
 
-    st = np.asarray(status).reshape(-1) if status is not None else np.zeros(n, dtype=np.int64)
+    st = (
+        np.asarray(status).reshape(-1)
+        if status is not None
+        else np.zeros(n, dtype=np.int64)
+    )
     mu, mv = missing_edges // n, missing_edges % n
     e_failed = (st[mu] != 0) | (st[mv] != 0)
     e_clipped = np.array([clipped[k] for k in missing_edges.tolist()], bool) & ~e_failed
@@ -1149,7 +1278,10 @@ def explain_difference(
 
     # --- ref-only tets: attribute to their missing edges -------------------------------------
     cause = dict(
-        zip(missing_edges.tolist(), np.where(e_failed, 1, np.where(e_clipped, 2, 3)).tolist())
+        zip(
+            missing_edges.tolist(),
+            np.where(e_failed, 1, np.where(e_clipped, 2, 3)).tolist(),
+        )
     )
     r_edges = _tet_edge_keys(r_only, n)
     tet_cause = np.zeros(len(r_only), dtype=np.int64)  # 0: all edges present
@@ -1170,7 +1302,9 @@ def explain_difference(
     # --- method-only tets: a violation means the violating point is not a neighbour ---------
     if len(m_only):
         m_edges = _tet_edge_keys(m_only, n)
-        out["method_only"]["with_spurious_edge"] = int((~np.isin(m_edges, ref_edges)).any(1).sum())
+        out["method_only"]["with_spurious_edge"] = int(
+            (~np.isin(m_edges, ref_edges)).any(1).sum()
+        )
     else:
         out["method_only"]["with_spurious_edge"] = 0
     return out
@@ -1218,7 +1352,11 @@ def compare_sets(tets_a: np.ndarray, tets_b: np.ndarray, n: int) -> dict:
     }
 
 
-METHOD_LABELS = {"paragram": "Paragram + conversion", "gdel3d": "gDel3D", "dewall": "Local DeWall"}
+METHOD_LABELS = {
+    "paragram": "Paragram + conversion",
+    "gdel3d": "gDel3D",
+    "dewall": "Local DeWall",
+}
 
 
 def print_block(
@@ -1230,6 +1368,7 @@ def print_block(
     compares,
     status_hist=None,
     explanations=None,
+    timing=None,
 ):
     """columns: [(label, metrics), ...] with the reference last; compares: {label: cmp} vs reference."""
     print(f"\n== {name}  (N={n}, {note})")
@@ -1237,9 +1376,12 @@ def print_block(
         print(f"   {s}")
     if status_hist:
         failed = n - status_hist.get("success", 0)
-        detail = ", ".join(f"{k}={v}" for k, v in status_hist.items() if v and k != "success")
+        detail = ", ".join(
+            f"{k}={v}" for k, v in status_hist.items() if v and k != "success"
+        )
         print(
-            f"   paragram status: {failed} / {n} cells failed" + (f" ({detail})" if detail else "")
+            f"   paragram status: {failed} / {n} cells failed"
+            + (f" ({detail})" if detail else "")
         )
     labels = [lab.split()[0] for lab, _ in columns]
     print("   " + f"{'metric':24s}" + "".join(f" {lab:>16s}" for lab in labels))
@@ -1248,8 +1390,12 @@ def print_block(
         vals = [fmt(getattr(m, k)) for _, m in columns]
         flag = "" if all(v == vals[-1] for v in vals) else "  <-"
         print("   " + f"{k:24s}" + "".join(f" {v:>16s}" for v in vals) + flag)
+    if timing:
+        print(format_timing_table(timing))
     for lab, c in compares.items():
-        verdict = "IDENTICAL" if c["method_only"] == 0 and c["ref_only"] == 0 else "DIFFERENT"
+        verdict = (
+            "IDENTICAL" if c["method_only"] == 0 and c["ref_only"] == 0 else "DIFFERENT"
+        )
         print(
             f"   {lab} vs {labels[-1]}: {verdict}  common={c['common']} {lab}-only={c['method_only']} "
             f"{labels[-1]}-only={c['ref_only']} jaccard={c['jaccard']:.4f}"
@@ -1262,7 +1408,9 @@ def print_block(
 def _save_json(path: str, results: dict, complete: bool) -> None:
     """Write results atomically; called after every dataset so partial results survive a crash."""
     results["_env"]["complete"] = complete
-    results["_env"]["datasets_done"] = len([k for k in results if not k.startswith("_")])
+    results["_env"]["datasets_done"] = len(
+        [k for k in results if not k.startswith("_")]
+    )
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(results, f, indent=1)
@@ -1276,7 +1424,10 @@ def main():
     ap.add_argument("--n", type=int, default=20000, help="samples per analytic surface")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
-        "--models", nargs="*", default=DEFAULT_MODELS, help="OBJ names from common-3d-test-models"
+        "--models",
+        nargs="*",
+        default=DEFAULT_MODELS,
+        help="OBJ names from common-3d-test-models",
     )
     ap.add_argument("--no-analytic", action="store_true", help="skip analytic surfaces")
     ap.add_argument(
@@ -1286,7 +1437,10 @@ def main():
         help="additional PLY point clouds / meshes (vertices are used)",
     )
     ap.add_argument(
-        "--jitter", type=float, default=0.0, help="relative Gaussian jitter added to every dataset"
+        "--jitter",
+        type=float,
+        default=0.0,
+        help="relative Gaussian jitter added to every dataset",
     )
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument(
@@ -1297,10 +1451,14 @@ def main():
     )
     ap.add_argument("--json", default=None, help="write all metrics to this file")
     ap.add_argument(
-        "--cgal-python", default=None, help="interpreter with the CGAL bindings (env CGAL_PYTHON)"
+        "--cgal-python",
+        default=None,
+        help="interpreter with the CGAL bindings (env CGAL_PYTHON)",
     )
     ap.add_argument(
-        "--cgal-bin", default=None, help="compiled cgal_delaunay tool (env CGAL_DELAUNAY_BIN)"
+        "--cgal-bin",
+        default=None,
+        help="compiled cgal_delaunay tool (env CGAL_DELAUNAY_BIN)",
     )
     ap.add_argument(
         "--paragram-bbox-pad",
@@ -1322,7 +1480,10 @@ def main():
         help="with --repair on, also recompute the cells of points on the convex hull exactly",
     )
     ap.add_argument(
-        "--gdel3d", choices=["auto", "on", "off"], default="auto", help="also run gDel3D (pyGDel3D)"
+        "--gdel3d",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="also run gDel3D (pyGDel3D)",
     )
     ap.add_argument(
         "--unit-cube",
@@ -1337,15 +1498,27 @@ def main():
         help="timed repetitions per method (correctness from run 1)",
     )
     ap.add_argument(
+        "--warmup",
+        type=int,
+        default=1,
+        help="untimed warm-up runs per method before timing (excludes JIT compilation, GPU clock ramp-up "
+        "and first-touch page faults from the measurements)",
+    )
+    ap.add_argument(
         "--slow-repeats",
         type=int,
         default=2,
         help="repetitions for a method whose first run is slow",
     )
     ap.add_argument(
-        "--slow-threshold", type=float, default=100.0, help="seconds above which a method is slow"
+        "--slow-threshold",
+        type=float,
+        default=100.0,
+        help="seconds above which a method is slow",
     )
-    ap.add_argument("--verbose", action="store_true", help="timestamped progress lines on stderr")
+    ap.add_argument(
+        "--verbose", action="store_true", help="timestamped progress lines on stderr"
+    )
     ap.add_argument(
         "--dewall-bin",
         default=os.environ.get("LOCAL_DEWALL_BIN"),
@@ -1360,7 +1533,9 @@ def main():
         os.environ["CGAL_DELAUNAY_BIN"] = args.cgal_bin
     use_gdel3d = args.gdel3d == "on" or (args.gdel3d == "auto" and gdel3d_available())
     if args.gdel3d != "off" and not use_gdel3d:
-        print("gDel3D not available (pip install pyGDel3D on a CUDA machine); skipping it")
+        print(
+            "gDel3D not available (pip install pyGDel3D on a CUDA machine); skipping it"
+        )
     dewall_bin = args.dewall_bin
     if dewall_bin and not os.path.exists(dewall_bin):
         print(f"Local DeWall binary not found: {dewall_bin}; skipping it")
@@ -1386,6 +1561,7 @@ def main():
         + (["dewall"] if dewall_bin else []),
         "unit_cube": args.unit_cube,
         "repeats": args.repeats,
+        "warmup": args.warmup,
         "slow_repeats": args.slow_repeats,
         "slow_threshold": args.slow_threshold,
         "argv": sys.argv[1:],
@@ -1394,7 +1570,10 @@ def main():
     summary = []
 
     datasets = build_datasets(args)
-    print("datasets: " + ", ".join(f"{name} ({len(pts)})" for name, pts, _ in datasets), flush=True)
+    print(
+        "datasets: " + ", ".join(f"{name} ({len(pts)})" for name, pts, _ in datasets),
+        flush=True,
+    )
     if args.ply:
         loaded = {name for name, _, note in datasets if note.startswith("PLY")}
         for path in args.ply:
@@ -1402,9 +1581,13 @@ def main():
                 print(f"WARNING: PLY file not loaded: {path}", flush=True)
 
     for name, pts, note in datasets:
-        pts = np.unique(pts.astype(np.float64), axis=0)  # Delaunay needs distinct points
+        pts = np.unique(
+            pts.astype(np.float64), axis=0
+        )  # Delaunay needs distinct points
         if args.jitter > 0:
-            pts = pts + rng.normal(scale=args.jitter * np.ptp(pts, axis=0).max(), size=pts.shape)
+            pts = pts + rng.normal(
+                scale=args.jitter * np.ptp(pts, axis=0).max(), size=pts.shape
+            )
         if args.unit_cube:
             pts = unit_cube(pts)
         log(f"{name}: {len(pts)} points" + (" (unit cube)" if args.unit_cube else ""))
@@ -1418,8 +1601,16 @@ def main():
         timing: dict[str, dict] = {}
 
         def repeat(label, fn):
-            """Run fn() args.repeats times (fewer if slow); keep the first result, aggregate timings."""
+            """Run fn() args.repeats times (fewer if slow); keep the first result, aggregate timings.
+            The first args.warmup runs are discarded so that one-off costs (JIT compilation of
+            Paragram's CUDA extension, GPU clock ramp-up, first-touch page faults) are not timed."""
             runs, result, reps, i = [], None, args.repeats, 0
+            for w in range(args.warmup):
+                log(f"{name}: {label} warm-up {w + 1}/{args.warmup} (not timed)")
+                res, tm = fn()
+                if result is None:
+                    result = res
+                log(f"{name}: {label} warm-up took {tm['total']:.3f}s")
             while i < reps:
                 log(f"{name}: {label} run {i + 1}/{reps}")
                 res, tm = fn()
@@ -1433,7 +1624,9 @@ def main():
                     )
                 i += 1
             timing[label] = summarize_runs(runs)
-            log(f"{name}: {label} mean {timing[label]['mean']:.3f}s over {len(runs)} run(s)")
+            log(
+                f"{name}: {label} mean {timing[label]['mean']:.3f}s over {len(runs)} run(s)"
+            )
             return result
 
         # ---- reference (CGAL parallel; the sequential build is timed alongside) ------------
@@ -1479,7 +1672,11 @@ def main():
                 from paragram_repair import repair_failed_cells
 
                 adjacency, offsets, repair_stats = repair_failed_cells(
-                    p_dev, adjacency, offsets, status, include_hull=args.repair_hull == "on"
+                    p_dev,
+                    adjacency,
+                    offsets,
+                    status,
+                    include_hull=args.repair_hull == "on",
                 )
                 t_cpu_repair = repair_stats["seconds"]
                 if repair_stats["repaired_cells"] == 0:
@@ -1501,11 +1698,31 @@ def main():
                 "repair_cpu": t_cpu_repair,
                 "conversion_gpu": t_gpu_conv,
             }
-            return (adjacency, offsets, status, adj_backend, status_hist, repair_stats, tets), tm
+            return (
+                adjacency,
+                offsets,
+                status,
+                adj_backend,
+                status_hist,
+                repair_stats,
+                tets,
+            ), tm
 
-        adjacency, offsets, status, adj_backend, status_hist, repair_stats, par_tets = repeat(
-            "paragram", paragram_fn
+        adjacency, offsets, status, adj_backend, status_hist, repair_stats, par_tets = (
+            repeat("paragram", paragram_fn)
         )
+        tp = timing["paragram"]
+        tp["breakdown"] = (
+            f"adjacency(GPU) {tp.get('adjacency_gpu_mean', 0):.3f} + repair(CPU) "
+            f"{tp.get('repair_cpu_mean', 0):.3f} + conversion(GPU) {tp.get('conversion_gpu_mean', 0):.3f}"
+        )
+        if "cgal_parallel" in timing:
+            thr = (ref_info or {}).get("threads", "?")
+            timing["cgal_parallel"]["breakdown"] = f"CPU only, {thr} threads (TBB)"
+        if "cgal_sequential" in timing:
+            timing["cgal_sequential"]["breakdown"] = (
+                "CPU only, 1 thread (same tool, CGAL_THREADS=1)"
+            )
         t_adj = timing["paragram"]["adjacency_gpu_mean"] + timing["paragram"].get(
             "repair_cpu_mean", 0.0
         )
@@ -1563,7 +1780,9 @@ def main():
             "adjacency": adj_backend,
             "adjacency_seconds": t_adj,
             "paragram_status": status_hist,
-            "paragram_bbox_pad": args.paragram_bbox_pad if backend == "paragram" else None,
+            "paragram_bbox_pad": args.paragram_bbox_pad
+            if backend == "paragram"
+            else None,
             "repair": repair_stats,
             "reference": ref_backend,
             "reference_info": {**ref_info, "seconds": t_ref},
@@ -1579,9 +1798,14 @@ def main():
         if use_gdel3d:
             runners.append(("gdel3d", lambda p=pts: run_gdel3d(p)))
         if dewall_bin:
-            in_unit = bool(pts.min() >= 0.0 and pts.max() < 1.0)  # --no-normalize needs [0,1)^3
+            in_unit = bool(
+                pts.min() >= 0.0 and pts.max() < 1.0
+            )  # --no-normalize needs [0,1)^3
             runners.append(
-                ("dewall", lambda p=pts, u=in_unit: run_dewall(p, dewall_bin, prenormalized=u))
+                (
+                    "dewall",
+                    lambda p=pts, u=in_unit: run_dewall(p, dewall_bin, prenormalized=u),
+                )
             )
         for label, fn in runners:
             try:
@@ -1607,7 +1831,9 @@ def main():
                 cmp_m = compare_sets(m_tets, ref_m, n)
                 columns.append((label, mm))
                 compares[label] = cmp_m
-                explanations[label] = explain_difference(pts_m, m_tets, ref_m, hull_m.volume)
+                explanations[label] = explain_difference(
+                    pts_m, m_tets, ref_m, hull_m.volume
+                )
                 note_m = ""
                 if pts_m is not pts:
                     cmp_o = compare_sets(m_tets, ref, n)
@@ -1619,6 +1845,35 @@ def main():
                         f"{cmp_o['ref_only']} ref-only]"
                     )
                 sources.append(_fmt_method_info(label, m_info) + note_m)
+                if label == "gdel3d" and m_info.get("stats_ms"):
+                    st = m_info["stats_ms"]
+                    timing[label]["breakdown"] = (
+                        "GPU: "
+                        + " ".join(
+                            f"{k.replace('Time', '')} {st[k] / 1000:.3f}"
+                            for k in (
+                                "initTime",
+                                "splitTime",
+                                "flipTime",
+                                "relocateTime",
+                                "sortTime",
+                            )
+                            if k in st
+                        )
+                        + " | CPU: "
+                        + " ".join(
+                            f"{k.replace('Time', '')} {st[k] / 1000:.3f}"
+                            for k in ("splayingTime", "outTime")
+                            if k in st
+                        )
+                    )
+                if label == "dewall":
+                    ph = m_info.get("phases_seconds") or {}
+                    timing[label]["breakdown"] = (
+                        "GPU: "
+                        + " ".join(f"{k} {v:.3f}" for k, v in ph.items())
+                        + " | CPU: file I/O + normalisation"
+                    )
                 entry.update(
                     {
                         label: asdict(mm),
@@ -1631,7 +1886,9 @@ def main():
                 sources.append(f"{label}: FAILED ({exc})")
                 entry[f"{label}_error"] = str(exc)
         columns.append((ref_backend, m_ref))
-        print_block(name, n, note, sources, columns, compares, status_hist, explanations)
+        print_block(
+            name, n, note, sources, columns, compares, status_hist, explanations, timing
+        )
         results[name] = entry
         if args.json:
             _save_json(args.json, results, complete=False)
@@ -1649,7 +1906,9 @@ def main():
     print(head + "  note")
     for name, e in summary:
         failed = (
-            (e["n"] - e["paragram_status"].get("success", 0)) if e.get("paragram_status") else 0
+            (e["n"] - e["paragram_status"].get("success", 0))
+            if e.get("paragram_status")
+            else 0
         )
         line = (
             f"{name:18s} {e['n']:7d} {e['ref']['tets']:10d} {e['paragram']['tets']:13d} {e['compare']['method_only']:13d} "
@@ -1665,6 +1924,31 @@ def main():
             else:
                 line += f" {'-':>12s} {'-':>12s} {'-':>8s} {'-':>5s}"
         print(line + f"  {e['note']}")
+    # ---- timing summary: datasets x methods (mean seconds over the repeated runs) ---------
+    labels = [
+        m
+        for m in ("paragram", "gdel3d", "dewall", "cgal_parallel", "cgal_sequential")
+        if any(m in (e.get("timing") or {}) for _, e in summary)
+    ]
+    if labels:
+        head2 = f"\n{'dataset':18s} {'N':>7s}" + "".join(
+            f" {TIMING_LABELS[m]:>16s}" for m in labels
+        )
+        print("\n" + "=" * len(head2.strip()))
+        print(
+            "mean wall time over the repeated runs, seconds (GPU+CPU total per method)"
+        )
+        print(head2)
+        for name, e in summary:
+            row = f"{name:18s} {e['n']:7d}"
+            for m in labels:
+                t = (e.get("timing") or {}).get(m)
+                row += f" {t['mean']:16.4f}" if t else f" {'-':>16s}"
+            print(row)
+        print(
+            "(per-method CPU / GPU split and phase breakdown: see the block above each dataset and report.md)"
+        )
+
     print(
         "viol = tetrahedra whose circumsphere strictly contains another input point (should be 0); "
         "volerr = |sum of tet volumes - convex hull volume| / hull volume (should be ~0); "

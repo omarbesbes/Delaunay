@@ -11,7 +11,7 @@ mkdir -p bin third_party results    # git-ignored, absent in a fresh clone
 ENV=${DELAUNAY_ENV:-$WORKDIR/envs/delaunay}
 ARCHS=${TORCH_CUDA_ARCH_LIST:-"7.0;8.0"}       # V100 (gpu, gpu_test) and A100 (gpua100)
 
-echo "== [1/7] conda environment: $ENV"
+echo "== [1/6] conda environment: $ENV"
 module purge
 set +u; module load anaconda3/2023.09-0/none-none; set -u
 export CONDA_PKGS_DIRS=$WORKDIR/.conda/pkgs      # keep the 50 GB home quota free
@@ -41,7 +41,7 @@ export CC=${CC:-x86_64-conda-linux-gnu-gcc}
 export CXX=${CXX:-x86_64-conda-linux-gnu-g++}
 echo "python: $(python -V) | nvcc: $(nvcc --version | tail -1) | host compiler: $($CXX --version | head -1)"
 
-echo "== [2/7] python packages (torch cu128, numpy, scipy, matplotlib, cgal bindings)"
+echo "== [2/6] python packages (torch cu128, numpy, scipy, matplotlib, cgal bindings)"
 # cu128 wheels have no Volta (sm_70) kernels: for the V100 partitions (gpu, gpu_test) install
 # the cu126 build instead with  TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 bash setup_ruche.sh
 PIP_FORCE=""
@@ -64,42 +64,34 @@ if "sm_70" not in archs:
     )
 PY
 
-echo "== [3/7] parallel CGAL tool (cgal_delaunay)"
-$CXX -O3 -std=c++17 -pthread -DCGAL_LINKED_WITH_TBB -I"$CONDA_PREFIX/include" cgal_delaunay.cpp \
-  -o bin/cgal_delaunay -L"$CONDA_PREFIX/lib" -Wl,-rpath,"$CONDA_PREFIX/lib" \
-  -ltbb -ltbbmalloc -lgmp -lmpfr -lpthread
+echo "== [3/6] standalone tools: parallel CGAL + Local DeWall"
+bash build_tools.sh ${REBUILD:+--force}
 python - <<'PY'
-import numpy as np, subprocess, os
-pts = np.random.default_rng(0).random((20000, 3)); pts.astype("<f8").tofile("/tmp/_pts.f64")
-out = subprocess.run(["bin/cgal_delaunay", "/tmp/_pts.f64", "/tmp/_tets.i32"], capture_output=True, text=True, check=True).stdout
+import subprocess
+
+import numpy as np
+
+np.random.default_rng(0).random((20000, 3)).astype("<f8").tofile("/tmp/_pts.f64")
+out = subprocess.run(
+    ["bin/cgal_delaunay", "/tmp/_pts.f64", "/tmp/_tets.i32"], capture_output=True, text=True, check=True
+).stdout
 print("cgal_delaunay:", out.strip())
 PY
 
-echo "== [4/7] Paragram (patched: relative clipping pad, cell budget)"
+echo "== [4/6] Paragram (patched: relative clipping pad, cell budget)"
 [ -d third_party/paragram ] || git clone -q --recursive https://github.com/zenseact/paragram.git third_party/paragram
 python patch_paragram.py third_party/paragram
 pip install -q $PIP_FORCE --no-deps third_party/paragram
 python -c "import paragram, inspect; print('paragram import OK; bbox_pad:', 'bbox_pad' in inspect.signature(paragram.voronoi_diagram).parameters)"
 echo "   (Paragram's CUDA extension is JIT-compiled at first use, inside the SLURM job on the GPU node)"
 
-echo "== [5/7] pyGDel3D (patched: dead-tet flags, phase timers, TORCH_CUDA_ARCH_LIST)"
+echo "== [5/6] pyGDel3D (patched: dead-tet flags, phase timers, TORCH_CUDA_ARCH_LIST)"
 [ -d third_party/pyGDel3D ] || git clone -q https://github.com/half-potato/pyGDel3D.git third_party/pyGDel3D
 python patch_pygdel3d.py third_party/pyGDel3D
 pip install -q $PIP_FORCE --no-build-isolation --no-deps third_party/pyGDel3D
 python -c "import gdel3d; print('pyGDel3D OK; get_stats:', hasattr(gdel3d.DelOutput, 'get_stats'))"
 
-echo "== [6/7] Local DeWall (patched for Linux; built for $ARCHS)"
-[ -d third_party/Local-DeWall ] || git clone -q https://github.com/WuhengGao/Local-DeWall.git third_party/Local-DeWall
-python patch_dewall.py third_party/Local-DeWall
-GENCODE=""
-for a in ${ARCHS//;/ }; do a=${a/./}; GENCODE="$GENCODE -gencode arch=compute_$a,code=sm_$a"; done
-D=third_party/Local-DeWall
-nvcc -O3 -std=c++17 -rdc=true -I$D/include $GENCODE -Xcompiler -fopenmp \
-  $D/src/delaunay_kernels.cu $D/src/delaunay_solver.cu $D/src/spatial_hash.cu $D/src/main_delaunay.cu \
-  -x cu $D/src/sampler.cpp -o bin/dewall -lgomp
-echo "   built bin/dewall"
-
-echo "== [7/7] prefetch meshes for the full suite (optional; compute nodes may lack internet)"
+echo "== [6/6] prefetch meshes for the full suite (optional; compute nodes may lack internet)"
 python - <<'PY' || echo "   mesh download failed (only needed for the full suite)"
 import test_delaunay_surfaces as T
 for m in T.DEFAULT_MODELS:

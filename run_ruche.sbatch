@@ -130,6 +130,19 @@ for attempt in $(seq 1 6); do
   sleep 10
 done
 
+# ---- preflight: build any missing tool, then report what the benchmark will actually run ----
+echo "== preflight: tools and methods"
+bash build_tools.sh || echo "   WARNING: a tool failed to build; the benchmark will skip it"
+python - <<'PY'
+import importlib.util
+import os
+
+print("   paragram :", "importable" if importlib.util.find_spec("paragram") else "MISSING")
+print("   gdel3d   :", "importable" if importlib.util.find_spec("gdel3d") else "MISSING (pyGDel3D not installed)")
+for tool, what in (("bin/cgal_delaunay", "CGAL parallel/sequential"), ("bin/dewall", "Local DeWall")):
+    print(f"   {tool:17s}:", f"OK ({what})" if os.access(tool, os.X_OK) else f"MISSING -> {what} will be skipped")
+PY
+
 DATASETS="--no-analytic --models"
 [ "${FULL:-0}" = "1" ] && DATASETS="--n 20000"
 COMMON="--unit-cube --repeats $REPEATS --slow-repeats 2 --slow-threshold 100 --verbose \
