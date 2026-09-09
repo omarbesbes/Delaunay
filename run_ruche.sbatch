@@ -134,7 +134,7 @@ done
 
 # ---- preflight: build any missing tool, then report what the benchmark will actually run ----
 echo "== preflight: tools and methods"
-bash build_tools.sh || echo "   WARNING: a tool failed to build; the benchmark will skip it"
+GPU_ARCHS="$ARCH" bash build_tools.sh || echo "   WARNING: a tool failed to build; the benchmark will skip it"
 python - <<'PY'
 import importlib.util
 import os

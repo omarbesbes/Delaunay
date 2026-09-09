@@ -6,7 +6,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p bin third_party
 FORCE=${1:-}
-ARCHS=${TORCH_CUDA_ARCH_LIST:-"7.0;8.0"}
+# GPU architectures for the standalone CUDA tools, e.g. GPU_ARCHS="7.0;8.0" (V100 and A100).
+# Deliberately NOT TORCH_CUDA_ARCH_LIST: that variable belongs to torch's extension builds and
+# often holds torch's full default list, with "+PTX" entries and architectures this nvcc rejects.
+ARCHS=${GPU_ARCHS:-"7.0;8.0"}
 CXX=${CXX:-x86_64-conda-linux-gnu-g++}
 PY=${PYTHON:-$(command -v python || command -v python3 || true)}
 
@@ -25,6 +28,26 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
+# Keep only real X.Y entries (dropping any "+PTX" suffix) that this nvcc actually supports.
+SUPPORTED=$(nvcc --list-gpu-arch 2>/dev/null | sed 's/compute_//' | paste -sd, -)
+SM=""
+for a in $(echo "$ARCHS" | tr ';,' '  '); do
+  a=${a%+PTX}
+  case "$a" in *.*) ;; *) echo "   ignoring arch '$a' (not X.Y)"; continue ;; esac
+  n=${a//./}
+  if [ -n "$SUPPORTED" ] && ! echo ",$SUPPORTED," | grep -q ",$n,"; then
+    echo "   ignoring sm_$n (this nvcc supports: $SUPPORTED)"
+    continue
+  fi
+  SM="$SM $n"
+done
+SM=$(echo $SM | tr ' ' '\n' | awk '!seen[$0]++' | paste -sd' ' -)
+[ -n "$SM" ] || { echo "no usable GPU architecture in GPU_ARCHS='$ARCHS'"; exit 1; }
+GENCODE=""
+for n in $SM; do GENCODE="$GENCODE -gencode arch=compute_$n,code=sm_$n"; done
+GS_ARCHS=$(echo $SM | tr ' ' ',')
+echo "-- GPU architectures: $(echo $SM | tr ' ' ',')"
+
 if [ "$FORCE" = "--force" ] || [ ! -x bin/cgal_delaunay ]; then
   echo "-- building bin/cgal_delaunay (CGAL parallel, TBB)"
   $CXX -O3 -std=c++17 -pthread -DCGAL_LINKED_WITH_TBB -I"$CONDA_PREFIX/include" cgal_delaunay.cpp \
@@ -35,11 +58,9 @@ else
 fi
 
 if [ "$FORCE" = "--force" ] || [ ! -x bin/dewall ]; then
-  echo "-- building bin/dewall (Local DeWall, archs $ARCHS)"
+  echo "-- building bin/dewall (Local DeWall, archs $GS_ARCHS)"
   [ -d third_party/Local-DeWall ] || git clone -q https://github.com/WuhengGao/Local-DeWall.git third_party/Local-DeWall
   $PY patch_dewall.py third_party/Local-DeWall
-  GENCODE=""
-  for a in ${ARCHS//;/ }; do a=${a/./}; GENCODE="$GENCODE -gencode arch=compute_$a,code=sm_$a"; done
   D=third_party/Local-DeWall
   nvcc -O3 -std=c++17 -rdc=true -I$D/include $GENCODE -Xcompiler -fopenmp \
     -diag-suppress 20054,68 \
@@ -50,9 +71,8 @@ else
 fi
 
 if [ "$FORCE" = "--force" ] || [ ! -x bin/gstar4d ]; then
-  echo "-- building bin/gstar4d (gStar4D, archs $ARCHS)"
+  echo "-- building bin/gstar4d (gStar4D, archs $GS_ARCHS)"
   [ -d third_party/gStar4D ] || git clone -q https://github.com/ashwin/gStar4D.git third_party/gStar4D
-  GS_ARCHS=$(echo "$ARCHS" | tr ';' ',' | tr -d '.')
   # patch_gstar4d.py ports the PBA stage off the texture-reference API (removed in CUDA 12) and
   # makes the PLY writer emit one 4-index tetrahedron per line at 9 significant digits; then
   # --build --run compiles predicates.c as C, then everything else with nvcc, echoing both

@@ -46,11 +46,11 @@ torch cu128, CGAL headers + TBB), so nothing depends on the cluster's module ver
    module load anaconda3/2023.09-0/none-none && source activate $WORKDIR/envs/delaunay
    export CUDA_HOME=$CONDA_PREFIX CC=x86_64-conda-linux-gnu-gcc CXX=x86_64-conda-linux-gnu-g++
    bash build_tools.sh            # or --force to rebuild what is already there
+   GPU_ARCHS="8.0" bash build_tools.sh --force   # only the GPU of this node (faster build)
    ```
    It creates `$WORKDIR/envs/delaunay`, installs the Python packages, builds `bin/cgal_delaunay`
    (parallel CGAL), installs the patched Paragram, pyGDel3D and GeoDel, builds `bin/dewall` (Local DeWall)
-   and `bin/gstar4d` (gStar4D) for V100 and A100 (`TORCH_CUDA_ARCH_LIST="7.0;8.0"`), and pre-downloads the
-   meshes. Each step prints a
+   and `bin/gstar4d` (gStar4D) for V100 and A100 (`GPU_ARCHS="7.0;8.0"`), and pre-downloads the meshes. Each step prints a
    check line; if one fails, the message says which tool is missing and the benchmark still runs without it.
 3. Submit the benchmark. **Use the A100 partition** (`gpua100`, the default in the script): the
    `cu128` torch wheels contain no Volta (sm_70) kernels, so Paragram and gDel3D cannot run on the

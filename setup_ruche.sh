@@ -66,7 +66,7 @@ if "sm_70" not in archs:
 PY
 
 echo "== [3/7] standalone tools: parallel CGAL + Local DeWall + gStar4D"
-bash build_tools.sh ${REBUILD:+--force}
+GPU_ARCHS="$ARCHS" bash build_tools.sh ${REBUILD:+--force}
 python - <<'PY'
 import subprocess
 
