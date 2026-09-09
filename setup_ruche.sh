@@ -38,8 +38,9 @@ pip install -q numpy scipy matplotlib certifi cgal ninja packaging rich
 python -c "import torch, CGAL.CGAL_Triangulation_3; print('torch', torch.__version__, '| CGAL bindings OK')"
 
 echo "== [3/7] parallel CGAL tool (cgal_delaunay)"
-$CXX -O3 -std=c++17 -DCGAL_LINKED_WITH_TBB -I"$CONDA_PREFIX/include" cgal_delaunay.cpp \
-  -o bin/cgal_delaunay -L"$CONDA_PREFIX/lib" -Wl,-rpath,"$CONDA_PREFIX/lib" -ltbb -ltbbmalloc -lgmp -lmpfr
+$CXX -O3 -std=c++17 -pthread -DCGAL_LINKED_WITH_TBB -I"$CONDA_PREFIX/include" cgal_delaunay.cpp \
+  -o bin/cgal_delaunay -L"$CONDA_PREFIX/lib" -Wl,-rpath,"$CONDA_PREFIX/lib" \
+  -ltbb -ltbbmalloc -lgmp -lmpfr -lpthread
 python - <<'PY'
 import numpy as np, subprocess, os
 pts = np.random.default_rng(0).random((20000, 3)); pts.astype("<f8").tofile("/tmp/_pts.f64")
