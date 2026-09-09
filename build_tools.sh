@@ -8,6 +8,22 @@ mkdir -p bin third_party
 FORCE=${1:-}
 ARCHS=${TORCH_CUDA_ARCH_LIST:-"7.0;8.0"}
 CXX=${CXX:-x86_64-conda-linux-gnu-g++}
+PY=${PYTHON:-$(command -v python || command -v python3 || true)}
+
+# Every tool here is built with the conda environment's nvcc / CGAL headers / TBB, so the
+# environment has to be active.  Say that plainly instead of failing on a missing command.
+missing=""
+[ -n "$PY" ] || missing="$missing python"
+command -v nvcc >/dev/null 2>&1 || missing="$missing nvcc"
+[ -n "${CONDA_PREFIX:-}" ] || missing="$missing \$CONDA_PREFIX"
+if [ -n "$missing" ]; then
+  echo "missing:$missing -- activate the environment first:"
+  echo "  module load anaconda3/2023.09-0/none-none"
+  echo "  source activate \${DELAUNAY_ENV:-\$WORKDIR/envs/delaunay}"
+  echo "  export CUDA_HOME=\$CONDA_PREFIX CC=x86_64-conda-linux-gnu-gcc CXX=x86_64-conda-linux-gnu-g++"
+  echo "(or run 'bash setup_ruche.sh', which activates it and calls this script)"
+  exit 1
+fi
 
 if [ "$FORCE" = "--force" ] || [ ! -x bin/cgal_delaunay ]; then
   echo "-- building bin/cgal_delaunay (CGAL parallel, TBB)"
@@ -21,7 +37,7 @@ fi
 if [ "$FORCE" = "--force" ] || [ ! -x bin/dewall ]; then
   echo "-- building bin/dewall (Local DeWall, archs $ARCHS)"
   [ -d third_party/Local-DeWall ] || git clone -q https://github.com/WuhengGao/Local-DeWall.git third_party/Local-DeWall
-  python patch_dewall.py third_party/Local-DeWall
+  $PY patch_dewall.py third_party/Local-DeWall
   GENCODE=""
   for a in ${ARCHS//;/ }; do a=${a/./}; GENCODE="$GENCODE -gencode arch=compute_$a,code=sm_$a"; done
   D=third_party/Local-DeWall
@@ -42,7 +58,7 @@ if [ "$FORCE" = "--force" ] || [ ! -x bin/gstar4d ]; then
   # --build --run compiles predicates.c as C, then everything else with nvcc, echoing both
   # commands and checking each output file (no shell in between: the login node's BASH_ENV
   # sources the module system, which does not survive a piped-and-traced script)
-  python patch_gstar4d.py third_party/gStar4D --build --run --arch="$GS_ARCHS" \
+  $PY patch_gstar4d.py third_party/gStar4D --build --run --arch="$GS_ARCHS" \
     --out=bin/gstar4d --cc="${CC:-cc}"
 else
   echo "-- bin/gstar4d present"
