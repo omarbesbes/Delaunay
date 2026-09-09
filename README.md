@@ -63,7 +63,7 @@ torch cu128, CGAL headers + TBB), so nothing depends on the cluster's module ver
    any of the partitions.)
    ```bash
    sbatch run_ruche.sbatch                 # the two point clouds, 10 timed repeats per method
-   TOOL_TIMEOUT=600 sbatch run_ruche.sbatch   # allow a slow external tool 10 min (default 120 s)
+   TOOL_TIMEOUT=120 sbatch run_ruche.sbatch   # allow a slow external tool 2 min (default 10 s)
    FULL=1 sbatch run_ruche.sbatch          # + analytic surfaces and meshes (20k samples each)
    REPEATS=5 sbatch run_ruche.sbatch
    squeue -u $USER                         # job state
@@ -119,7 +119,7 @@ is mapped, raw `cuInit` / `cudaMalloc` error codes, a tiny `nvcc`-built CUDA pro
 --verbose                     timestamped progress on stderr
 --paragram-bbox-pad 10 | -1   relative clipping pad (patched Paragram) | upstream absolute 1.0
 --repair on|off, --repair-hull on|off   exact CPU repair of failed / convex-hull cells (capped at 20 % of the points)
---tool-timeout 120            kill an external tool (gStar4D, Local DeWall) after N s and report it
+--tool-timeout 10             kill an external tool (gStar4D, Local DeWall) after N s and report it
                               as failed on that dataset (0 = no limit); gStar4D's star-consistency
                               loop has no iteration cap and can spin forever on hard input, and
                               Local DeWall needs minutes on near-co-spherical input
@@ -154,8 +154,8 @@ extension cache; the job does a warm-up call before timing.
   loses edges silently on unbounded (hull) cells and on near-co-spherical input; the CPU repair fixes what
   is flagged or on the hull, and the report states what fraction of cells was recomputed on the CPU.
 - Local DeWall is exact but very slow on near-co-spherical input (hundreds of seconds for 20k sphere
-  points), so with the default `--tool-timeout 120` it is reported as failed on those datasets;
-  raise the limit (`TOOL_TIMEOUT=600`) if those numbers matter.
+  points), so with the default `--tool-timeout 10` it is reported as failed on those datasets;
+  raise the limit (`TOOL_TIMEOUT=120`) if those numbers matter.
 - gStar4D is from 2013 and needs three source changes to be usable, all in `patch_gstar4d.py`: its discrete
   Voronoi stage uses the texture-reference API, removed in CUDA 12 (replaced by `__ldg` loads through device
   pointers, numerically identical); its PLY writer split each tetrahedron into three triangles at 6 digits

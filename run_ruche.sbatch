@@ -11,7 +11,7 @@
 # Usage:  sbatch run_ruche.sbatch                 (your two point clouds, 10 repeats)
 #         FULL=1 sbatch run_ruche.sbatch          (also analytic surfaces + meshes, 20k samples each)
 #         REPEATS=5 sbatch run_ruche.sbatch
-#         TOOL_TIMEOUT=300 sbatch run_ruche.sbatch   (kill a hanging external tool sooner)
+#         TOOL_TIMEOUT=120 sbatch run_ruche.sbatch   (give a slow external tool longer than 10 s)
 # Methods: Paragram + conversion (GPU), gDel3D (GPU), gStar4D (GPU), Local DeWall (GPU),
 #          GeoDel / Geogram (CPU-parallel), CGAL parallel (TBB) and CGAL sequential.
 set -euo pipefail
@@ -40,11 +40,12 @@ CUDA_TARGET=$CONDA_PREFIX/targets/x86_64-linux
 echo "cuda_runtime_api.h: $(ls "$CUDA_TARGET/include/cuda_runtime_api.h" 2>/dev/null || ls "$CONDA_PREFIX/include/cuda_runtime_api.h" 2>/dev/null || echo NOT FOUND)"
 REPEATS=${REPEATS:-10}
 # A run that takes longer than this is not of interest: the external tool (gStar4D, Local DeWall)
-# is killed and reported as failed for that dataset.  gStar4D's star-consistency loop has no
-# iteration cap and does not converge on every input; Local DeWall needs minutes on
-# near-co-spherical input.  The warm-up run hits the limit first, so a method that cannot do a
-# dataset costs one timeout, not one per repetition.
-TOOL_TIMEOUT=${TOOL_TIMEOUT:-120}
+# is killed and reported as failed for that dataset.  The warm-up run hits the limit first, so a
+# method that cannot do a dataset costs one timeout, not one per repetition.  At 10 s this also
+# cuts off the cases that merely run long: Local DeWall needs minutes on near-co-spherical input,
+# and gStar4D takes 1.5 s on a 100k cloud but stalls indefinitely when its grid loses too many
+# points to voxel collisions.
+TOOL_TIMEOUT=${TOOL_TIMEOUT:-10}
 OUT=results/$SLURM_JOB_ID
 mkdir -p "$OUT"
 

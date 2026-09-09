@@ -1928,9 +1928,9 @@ def main():
     ap.add_argument(
         "--tool-timeout",
         type=float,
-        default=120.0,
+        default=10.0,
         help="seconds after which an external tool (gStar4D, Local DeWall) is killed and reported "
-        "as failed on that dataset; 0 = no limit (default 120)",
+        "as failed on that dataset; 0 = no limit (default 10)",
     )
     ap.add_argument(
         "--gstar4d-facet-max",
