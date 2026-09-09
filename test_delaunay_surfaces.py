@@ -819,7 +819,10 @@ def _read_mat(path: str, kind: str) -> np.ndarray:
 
 
 def run_dewall(
-    points: np.ndarray, binary: str, prenormalized: bool = False
+    points: np.ndarray,
+    binary: str,
+    prenormalized: bool = False,
+    timeout: float | None = None,
 ) -> tuple[np.ndarray, float, dict]:
     """Local DeWall (Gao & Chen, CAD 2026) through its command-line tool, built from
     https://github.com/WuhengGao/Local-DeWall with patch_dewall.py.
@@ -845,7 +848,14 @@ def run_dewall(
             )  # 9 significant digits round-trip float32 exactly
         cmd = [binary, prefix, pin] + (["--no-normalize"] if prenormalized else [])
         t0 = time.perf_counter()
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=d, check=False)
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, cwd=d, check=False, timeout=timeout
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"Local DeWall did not finish within {timeout:.0f}s and was killed"
+            ) from exc
         wall = time.perf_counter() - t0
         if r.returncode != 0 or not os.path.exists(prefix + "t.bin"):
             raise RuntimeError(
@@ -1032,6 +1042,7 @@ def run_gstar4d(
     grid_size: int = 256,
     facet_max: int | None = None,
     check: bool = False,
+    timeout: float | None = None,
 ) -> tuple[np.ndarray, float, dict]:
     """gStar4D (Nanjappa 2013, https://github.com/ashwin/gStar4D) through its command-line tool,
     built from source with patch_gstar4d.py.  GPU only: a discrete Voronoi diagram (PBA) seeds one
@@ -1050,6 +1061,9 @@ def run_gstar4d(
     )  # the tool runs with cwd set to the temporary directory
     p32 = np.ascontiguousarray(points, dtype=np.float32)
     scaled, orig_of_scaled, meta = _gstar4d_input_set(p32, grid_size)
+    # gStar4D's star-consistency phase is a `do { ... } while (true)` loop with no iteration cap:
+    # if its insertions never reach zero it never returns.  Bound it so one dataset cannot stall
+    # the whole benchmark; the caller reports the method as failed on this dataset and moves on.
     with tempfile.TemporaryDirectory() as d:
         pin, pout = os.path.join(d, "points.txt"), os.path.join(d, "out.ply")
         with open(pin, "w") as f:
@@ -1062,7 +1076,25 @@ def run_gstar4d(
         if check:
             cmd += ["-check"]
         t0 = time.perf_counter()
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=d, check=False)
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, cwd=d, check=False, timeout=timeout
+            )
+        except subprocess.TimeoutExpired as exc:
+            out = (
+                (exc.stdout or b"")
+                if isinstance(exc.stdout, bytes)
+                else (exc.stdout or "")
+            )
+            tail = (
+                out.decode(errors="replace")[-800:]
+                if isinstance(out, bytes)
+                else out[-800:]
+            )
+            raise RuntimeError(
+                f"gStar4D did not finish within {timeout:.0f}s and was killed "
+                f"(its star-consistency loop has no iteration cap); last output: {tail!r}"
+            ) from exc
         wall = time.perf_counter() - t0
         if r.returncode != 0 or not os.path.exists(pout):
             raise RuntimeError(
@@ -1862,6 +1894,13 @@ def main():
         help="gStar4D PBA grid resolution (-g); the point coordinates are scaled into it (default 256)",
     )
     ap.add_argument(
+        "--tool-timeout",
+        type=float,
+        default=1800.0,
+        help="seconds after which an external tool (gStar4D, Local DeWall) is killed and reported "
+        "as failed on that dataset; 0 = no limit (default 1800)",
+    )
+    ap.add_argument(
         "--gstar4d-facet-max",
         type=int,
         default=0,
@@ -1924,6 +1963,7 @@ def main():
         "geodel_threads": geodel_threads if use_geodel else None,
         "gstar4d_grid": args.gstar4d_grid if gstar4d_bin else None,
         "gstar4d_facet_max": (args.gstar4d_facet_max or None) if gstar4d_bin else None,
+        "tool_timeout": args.tool_timeout or None,
         "unit_cube": args.unit_cube,
         "repeats": args.repeats,
         "warmup": args.warmup,
@@ -2182,6 +2222,7 @@ def main():
                         gstar4d_bin,
                         grid_size=args.gstar4d_grid,
                         facet_max=args.gstar4d_facet_max or None,
+                        timeout=args.tool_timeout or None,
                     ),
                 )
             )
@@ -2196,7 +2237,12 @@ def main():
             runners.append(
                 (
                     "dewall",
-                    lambda p=pts, u=in_unit: run_dewall(p, dewall_bin, prenormalized=u),
+                    lambda p=pts, u=in_unit: run_dewall(
+                        p,
+                        dewall_bin,
+                        prenormalized=u,
+                        timeout=args.tool_timeout or None,
+                    ),
                 )
             )
         for label, fn in runners:

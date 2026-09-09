@@ -107,6 +107,9 @@ is mapped, raw `cuInit` / `cudaMalloc` error codes, a tiny `nvcc`-built CUDA pro
 --verbose                     timestamped progress on stderr
 --paragram-bbox-pad 10 | -1   relative clipping pad (patched Paragram) | upstream absolute 1.0
 --repair on|off, --repair-hull on|off   exact CPU repair of failed / convex-hull cells (capped at 20 % of the points)
+--tool-timeout 1800           kill an external tool (gStar4D, Local DeWall) after N s and report it
+                              as failed on that dataset (0 = no limit); gStar4D's star-consistency
+                              loop has no iteration cap and can spin forever on hard input
 --gdel3d auto|on|off, --geodel auto|on|off, --geodel-threads N (0 = SLURM_CPUS_PER_TASK, else all cores)
 --dewall-bin PATH, --gstar4d-bin PATH, --gstar4d-grid 256 (its PBA grid), --gstar4d-facet-max N
 --cgal-bin PATH, --cgal-python PATH
@@ -142,5 +145,10 @@ extension cache; the job does a warm-up call before timing.
   of precision (now one 4-index line at 9 digits, enough to identify the points exactly); and it built only
   for `sm_35`. It is compiled with `-fmad=false`, without which the GPU-side Shewchuk predicates stop being
   exact. It also drops duplicate points, which the benchmark reports.
+- gStar4D's star-consistency phase (`processFacets`) loops until no star needs another insertion,
+  with no iteration cap, so on a hard input it can run for hours or never finish. `--tool-timeout`
+  bounds it: the method is then reported as failed on that dataset and the run continues. To see
+  what it is doing, run the binary directly with `-verbose -stats -timing`, which prints a
+  `Loop: N` line per iteration.
 - GeoDel is the only CPU-parallel method besides CGAL, and gets the same core count as CGAL parallel
   (`--geodel-threads $SLURM_CPUS_PER_TASK`), so the two are directly comparable.
