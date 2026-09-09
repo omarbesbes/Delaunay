@@ -1129,6 +1129,19 @@ def run_gstar4d(
         if m:
             phases[label] = float(m.group(1)) / 1000.0  # the tool prints milliseconds
     info["self_reported_total_seconds"] = phases.get("total")
+    # verbose-only diagnostics of the phase that seeds the stars: "missing" points are those the
+    # PBA grid could not separate (several points in one voxel), which is what a non-uniform cloud
+    # produces and what the initial-star phase then has to fix up.
+    m = re.search(r"^Missing points:\s*(\d+)", out, re.MULTILINE)
+    if m:
+        info["missing_points"] = int(m.group(1))
+    m = re.search(
+        r"^Workset pairs:\s*(\d+)\s*\(after missing and reciprocated\)",
+        out,
+        re.MULTILINE,
+    )
+    if m:
+        info["workset_pairs"] = int(m.group(1))
     loops = re.findall(r"^Loop:\s*(\d+)\s*$", out, re.MULTILINE)
     if loops:  # only with verbose=True; the last one is the iteration that converged
         info["consistency_loops"] = int(loops[-1]) + 1

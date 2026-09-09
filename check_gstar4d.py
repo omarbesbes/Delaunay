@@ -97,6 +97,7 @@ def case(
     jitter: float = 0.0,
     seed: int = 0,
     repeat: int = 1,
+    facet_max: int | None = None,
 ) -> bool:
     """Run the benchmark's own runner, then compare against the reference on its point set.
 
@@ -109,7 +110,8 @@ def case(
             scale=jitter * np.ptp(points, axis=0).max(), size=points.shape
         )
     print(
-        f"  {name:<22s} n={len(points):<8d} g={grid:<5d} jit={jitter:<7g} ",
+        f"  {name:<22s} n={len(points):<8d} g={grid:<5d} jit={jitter:<7g} "
+        f"f={facet_max or 'dflt':<9} ",
         end="",
         flush=True,
     )
@@ -117,7 +119,12 @@ def case(
     for _ in range(repeat):
         try:
             tets, secs, info = T.run_gstar4d(
-                points, binary, grid_size=grid, timeout=timeout, verbose=True
+                points,
+                binary,
+                grid_size=grid,
+                facet_max=facet_max,
+                timeout=timeout,
+                verbose=True,
             )
             runs.append((tets, secs, info))
         except Exception as exc:  # noqa: BLE001 - this is the thing being tested
@@ -138,6 +145,7 @@ def case(
     tets, secs, info = runs[0]
     msg = (
         f"OK  {secs:7.3f}s  tets={len(tets):<8d} loops={info.get('consistency_loops', '?'):<4} "
+        f"missing={info.get('missing_points', '?'):<6} "
         f"match={info['max_match_dist']:.0e} dropped={info['dropped_duplicate_points']}"
         f"+{info['dropped_after_scaling']}"
     )
@@ -180,6 +188,14 @@ def main() -> int:
         "removes the exact co-spherical and co-planar degeneracies of a structured cloud",
     )
     ap.add_argument(
+        "--facet-max",
+        type=int,
+        nargs="+",
+        default=[0],
+        help="gStar4D working-set caps to try (-f, 0 = its default of 12000000); the initial-star "
+        "phase processes at most this many facet insertions per pass",
+    )
+    ap.add_argument(
         "--sizes",
         type=int,
         nargs="+",
@@ -209,7 +225,7 @@ def main() -> int:
         return 2
     print(
         f"binary: {os.path.abspath(args.bin)}   grids: {args.grid}   jitters: {args.jitter}   "
-        f"timeout: {args.timeout:.0f}s/case\n"
+        f"facet-max: {args.facet_max}   timeout: {args.timeout:.0f}s/case\n"
     )
     ok = True
 
@@ -221,17 +237,19 @@ def main() -> int:
         pts = np.random.default_rng([args.seed, n]).random((n, 3))
         for grid in args.grid:
             for jit in args.jitter:
-                ok &= case(
-                    "uniform in a cube",
-                    pts,
-                    args.bin,
-                    grid,
-                    args.timeout,
-                    not args.no_reference,
-                    jit,
-                    args.seed,
-                    args.repeat,
-                )
+                for fm in args.facet_max:
+                    ok &= case(
+                        "uniform in a cube",
+                        pts,
+                        args.bin,
+                        grid,
+                        args.timeout,
+                        not args.no_reference,
+                        jit,
+                        args.seed,
+                        args.repeat,
+                        fm or None,
+                    )
 
     for path in args.ply:
         name = os.path.splitext(os.path.basename(path))[0]
@@ -247,17 +265,19 @@ def main() -> int:
             )
             for grid in args.grid:
                 for jit in args.jitter:
-                    ok &= case(
-                        name,
-                        sub,
-                        args.bin,
-                        grid,
-                        args.timeout,
-                        not args.no_reference,
-                        jit,
-                        args.seed,
-                        args.repeat,
-                    )
+                    for fm in args.facet_max:
+                        ok &= case(
+                            name,
+                            sub,
+                            args.bin,
+                            grid,
+                            args.timeout,
+                            not args.no_reference,
+                            jit,
+                            args.seed,
+                            args.repeat,
+                            fm or None,
+                        )
 
     print(
         "\nA TIMEOUT in [1] means the build or the CUDA-12 port is broken; a TIMEOUT only in [3] "
