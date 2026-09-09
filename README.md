@@ -63,14 +63,16 @@ torch cu128, CGAL headers + TBB), so nothing depends on the cluster's module ver
    any of the partitions.)
    ```bash
    sbatch run_ruche.sbatch                 # the two point clouds, 10 timed repeats per method
+   FULL=1 BASELINE=0 sbatch run_ruche.sbatch  # everything: clouds + analytic surfaces + meshes,
+                                              # corrected Paragram only, with and without jitter
    TOOL_TIMEOUT=120 sbatch run_ruche.sbatch   # allow a slow external tool 2 min (default 10 s)
-   FULL=1 sbatch run_ruche.sbatch          # + analytic surfaces and meshes (20k samples each)
    REPEATS=5 sbatch run_ruche.sbatch
+   JITTER=0 sbatch run_ruche.sbatch           # skip the jittered pass
    squeue -u $USER                         # job state
    tail -f results/delaunay-bench.o<jobid> # live progress ([HH:MM:SS] lines: dataset, method, run i/N)
    ```
-   The job runs three passes: corrected Paragram (10x clipping pad, CPU repair) with gDel3D, gStar4D,
-   Local DeWall, GeoDel and CGAL; the upstream Paragram baseline (legacy clipping box, no repair; 3 repeats); and a jittered
+   The job runs up to three passes, selected by `BASELINE` and `JITTER`: corrected Paragram
+   (10x clipping pad, CPU repair) with gDel3D, gStar4D, Local DeWall, GeoDel and CGAL; the upstream Paragram baseline (legacy clipping box, no repair; 3 repeats); and a jittered
    pass (3 repeats). A method whose first run exceeds 100 s is repeated only twice.
 4. Results, in `results/<jobid>/`: `report.md` (+ PNG charts), `results*.json` (all numbers; written after
    every dataset, so partial results survive a crash), `run*.log` (full console output).

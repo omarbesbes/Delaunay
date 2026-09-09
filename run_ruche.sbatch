@@ -10,6 +10,8 @@
 #SBATCH --time=04:00:00
 # Usage:  sbatch run_ruche.sbatch                 (your two point clouds, 10 repeats)
 #         FULL=1 sbatch run_ruche.sbatch          (also analytic surfaces + meshes, 20k samples each)
+#         BASELINE=0 sbatch run_ruche.sbatch      (only the corrected Paragram, no upstream baseline)
+#         JITTER=0 sbatch run_ruche.sbatch        (skip the jittered pass)
 #         REPEATS=5 sbatch run_ruche.sbatch
 #         TOOL_TIMEOUT=120 sbatch run_ruche.sbatch   (give a slow external tool longer than 10 s)
 # Methods: Paragram + conversion (GPU), gDel3D (GPU), gStar4D (GPU), Local DeWall (GPU),
@@ -46,6 +48,12 @@ REPEATS=${REPEATS:-10}
 # and gStar4D takes 1.5 s on a 100k cloud but stalls indefinitely when its grid loses too many
 # points to voxel collisions.
 TOOL_TIMEOUT=${TOOL_TIMEOUT:-10}
+# Which passes to run.  The jitter pass gets the same number of repeats as the main one, so the
+# "without jitter -> with jitter" timings in the report are comparable.
+BASELINE=${BASELINE:-1}                          # 0 = skip the uncorrected-Paragram pass
+BASELINE_REPEATS=${BASELINE_REPEATS:-3}
+JITTER=${JITTER:-1e-6}                           # 0 = skip the jittered pass
+JITTER_REPEATS=${JITTER_REPEATS:-$REPEATS}
 OUT=results/$SLURM_JOB_ID
 mkdir -p "$OUT"
 
@@ -172,12 +180,23 @@ python -c "import torch, paragram; d = paragram.voronoi_diagram(torch.rand(10000
 echo "== corrected Paragram (pad 10x, CPU repair) + gDel3D + gStar4D + Local DeWall + GeoDel + CGAL parallel/sequential"
 python test_delaunay_surfaces.py $COMMON --paragram-bbox-pad 10 --repair on --json "$OUT/results.json" 2>&1 | tee "$OUT/run.log"
 
-echo "== baseline Paragram (upstream box, no repair), 3 repeats -- Paragram only, the others are unaffected"
-python test_delaunay_surfaces.py $COMMON --repeats 3 --paragram-bbox-pad -1 --repair off \
-  --gdel3d off --geodel off --gstar4d-bin "" --dewall-bin "" --json "$OUT/results_baseline.json" 2>&1 | tee "$OUT/run_baseline.log"
+REPORT_ARGS=("$OUT/results.json")
 
-echo "== jittered (1e-6) run, 3 repeats"
-python test_delaunay_surfaces.py $COMMON --repeats 3 --jitter 1e-6 --paragram-bbox-pad 10 --repair on --json "$OUT/results_jitter.json" 2>&1 | tee "$OUT/run_jitter.log"
+if [ "$BASELINE" = "1" ]; then
+  echo "== baseline Paragram (upstream box, no repair), $BASELINE_REPEATS repeats -- Paragram only, the others are unaffected"
+  python test_delaunay_surfaces.py $COMMON --repeats "$BASELINE_REPEATS" --paragram-bbox-pad -1 --repair off \
+    --gdel3d off --geodel off --gstar4d-bin "" --dewall-bin "" --json "$OUT/results_baseline.json" 2>&1 | tee "$OUT/run_baseline.log"
+  REPORT_ARGS+=(--baseline "$OUT/results_baseline.json")
+else
+  echo "== baseline Paragram pass skipped (BASELINE=0): only the corrected Paragram is measured"
+fi
 
-python make_report.py "$OUT/results.json" --baseline "$OUT/results_baseline.json" --jitter "$OUT/results_jitter.json" -o "$OUT/report.md"
+if [ "$JITTER" != "0" ]; then
+  echo "== jittered ($JITTER) run, $JITTER_REPEATS repeats -- same datasets without co-spherical degeneracies"
+  python test_delaunay_surfaces.py $COMMON --repeats "$JITTER_REPEATS" --jitter "$JITTER" \
+    --paragram-bbox-pad 10 --repair on --json "$OUT/results_jitter.json" 2>&1 | tee "$OUT/run_jitter.log"
+  REPORT_ARGS+=(--jitter "$OUT/results_jitter.json")
+fi
+
+python make_report.py "${REPORT_ARGS[@]}" -o "$OUT/report.md"
 echo "== done: $OUT/report.md"
