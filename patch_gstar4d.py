@@ -31,10 +31,15 @@ gStar4D is from 2013 and needs three things before it can be used in this benchm
 3. **An `sm_35` build.**  The CMakeLists hardcodes `-gencode arch=compute_35,code=sm_35` (dropped
    in CUDA 12) and uses `find_package(CUDA)`/`cuda_add_executable`, removed in CMake 4.  This
    script prints a plain nvcc command line instead (as patch_dewall.py does for Local DeWall).
-   That line compiles *every* source as CUDA (`-x cu`), including the four `.cpp` files: they
-   include `<thrust/count.h>` through `Geometry.h`, and a modern Thrust pulls CUB's device code
-   into the translation unit, so compiling them as plain host C++ fails with hundreds of errors
-   about `threadIdx` and `__syncthreads` being undeclared.
+   Every source has to be compiled as CUDA, including the four `.cpp` files: they include
+   `<thrust/count.h>` through `Geometry.h`, and a modern Thrust pulls CUB's device code into the
+   translation unit, so compiling them as plain host C++ fails with hundreds of errors about
+   `threadIdx` and `__syncthreads` being undeclared.  That cannot be done with `nvcc -x cu`,
+   because unlike `gcc -x`, nvcc's `-x` is global rather than positional and would also apply to
+   the pre-compiled `predicates.o` on the command line (nvcc then feeds the object file to the
+   host compiler as source, which reports thousands of "null character(s) ignored" warnings).  So
+   this script creates a `.cu` symlink next to each of those four files and compiles those
+   instead, letting the suffix pick the language, file by file.
 
 `-fmad=false` in that command line is required, not cosmetic: `GDelShewchukDevice.h` implements
 Shewchuk's exact predicates on the GPU with Two_Product/Split, whose error-free transformations
@@ -136,10 +141,16 @@ PLY_FACES_NEW = """    // One line per tetrahedron ("4 v0 v1 v2 v3") instead of 
         outFile << endl;
 """
 
-CU_SOURCES = [
-    "GDelaunay/Common/Geometry.cu",
+# These four are C++ files that must nevertheless be compiled as CUDA (see the note above), which
+# is arranged by compiling them through a sibling symlink with a .cu suffix, created by patch().
+CPP_AS_CU = [
     "GDelaunay/Common/DtRandom.cpp",
     "GDelaunay/GDelaunay/GDelaunay.cpp",
+    "GDelaunay/Main/Application.cpp",
+    "GDelaunay/Main/Main.cpp",
+]
+CU_SOURCES = [
+    "GDelaunay/Common/Geometry.cu",
     "GDelaunay/GDelaunay/GDelCommon.cu",
     "GDelaunay/GDelaunay/GDelData.cu",
     "GDelaunay/GDelaunay/GDelHost.cu",
@@ -147,9 +158,7 @@ CU_SOURCES = [
     "GDelaunay/GDelaunay/GDelPredKernels.cu",
     "GDelaunay/PBA/Pba.cu",
     "GDelaunay/PBA/pba3DHost.cu",
-    "GDelaunay/Main/Application.cpp",
-    "GDelaunay/Main/Main.cpp",
-]
+] + [c[: -len(".cpp")] + ".cu" for c in CPP_AS_CU]
 INCLUDE_DIRS = [
     "GDelaunay/Common",
     "GDelaunay/GDelaunay",
@@ -218,7 +227,7 @@ def build_commands(
         f"{cc} -O2 -fno-fast-math -ffp-contract=off -c {predicates} -o {obj}",
         (
             f"nvcc -O3 -std=c++17 -DNDEBUG -fmad=false -Wno-deprecated-gpu-targets {gencode} "
-            f"{includes} -Xcompiler -Wno-unknown-pragmas {obj} -x cu {srcs} -o {out}"
+            f"{includes} -Xcompiler -Wno-unknown-pragmas {srcs} {obj} -o {out}"
         ),
     ]
 
@@ -284,6 +293,23 @@ def patch(root: str) -> bool:
         with open(kern, "w") as f:
             f.write(src.replace(TEXFETCH_ANCHOR, TEXFETCH_NEW, 1))
         print("GDelaunay/PBA/pba3DKernel.h: tex1Dfetch -> __ldg")
+
+    made = 0
+    for rel in CPP_AS_CU:
+        link = os.path.join(root, rel[: -len(".cpp")] + ".cu")
+        target = os.path.basename(rel)
+        if os.path.lexists(link):
+            continue
+        try:
+            os.symlink(target, link)
+        except OSError:  # no symlinks on this filesystem: a copy works as well
+            with open(os.path.join(root, rel), "rb") as f_in, open(link, "wb") as f_out:
+                f_out.write(f_in.read())
+        made += 1
+    print(
+        f"{len(CPP_AS_CU)} .cpp file(s) reachable as .cu ({made} created): compiled as CUDA, "
+        "as their Thrust includes require"
+    )
 
     geom = os.path.join(root, "GDelaunay", "Common", "Geometry.cu")
     with open(geom) as f:
