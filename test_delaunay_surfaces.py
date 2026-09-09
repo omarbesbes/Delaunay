@@ -1785,6 +1785,28 @@ def print_block(
                 print(line)
 
 
+def _mark_running(path: str, results: dict, dataset: str, method: str) -> None:
+    """Record which measurement is about to start, so that --resume can tell what killed the
+    process.  A library that aborts or segfaults (gDel3D has done both) takes the interpreter with
+    it, and no `except` can catch that."""
+    if path:
+        results["_in_progress"] = [dataset, method]
+        _save_json(path, results, complete=False)
+
+
+def _resume_from(path: str) -> tuple[dict, set[tuple[str, str]]]:
+    """(datasets already measured, {(dataset, method) whose process died})."""
+    if not path or not os.path.exists(path):
+        return {}, set()
+    with open(path) as f:
+        old = json.load(f)
+    old.pop("_env", None)
+    running = old.pop("_in_progress", None)
+    done = {k: v for k, v in old.items() if not k.startswith("_")}
+    crashed = {(running[0], running[1])} if running else set()
+    return done, crashed
+
+
 def _save_json(path: str, results: dict, complete: bool) -> None:
     """Write results atomically; called after every dataset so partial results survive a crash."""
     results["_env"]["complete"] = complete
@@ -1900,6 +1922,13 @@ def main():
         "--verbose", action="store_true", help="timestamped progress lines on stderr"
     )
     ap.add_argument(
+        "--resume",
+        action="store_true",
+        help="keep the datasets already in --json and measure only the missing ones; the "
+        "measurement whose process died (a library that aborts or segfaults kills the "
+        "interpreter) is skipped on this attempt",
+    )
+    ap.add_argument(
         "--geodel",
         choices=["auto", "on", "off"],
         default="auto",
@@ -2013,6 +2042,19 @@ def main():
     }
     results = {"_env": env}
     summary = []
+    done, crashed = _resume_from(args.json) if args.resume else ({}, set())
+    if done or crashed:
+        print(
+            f"resuming: {len(done)} dataset(s) already measured"
+            + (
+                f"; skipping {', '.join(f'{d}/{m}' for d, m in sorted(crashed))} "
+                "(the process died there last time)"
+                if crashed
+                else ""
+            ),
+            flush=True,
+        )
+    results.update(done)
 
     datasets = build_datasets(args)
     print(
@@ -2035,6 +2077,10 @@ def main():
             )
         if args.unit_cube:
             pts = unit_cube(pts)
+        if name in done:
+            summary.append((name, done[name]))
+            log(f"{name}: already measured, skipped (--resume)")
+            continue
         log(f"{name}: {len(pts)} points" + (" (unit cube)" if args.unit_cube else ""))
         # Paragram consumes float32: use the float32-rounded coordinates everywhere so that all
         # methods triangulate exactly the same point set.
@@ -2088,6 +2134,7 @@ def main():
                 tm["sequential"] = info["sequential_seconds"]
             return (r, backend, info), tm
 
+        _mark_running(args.json, results, name, "cgal_parallel")
         ref, ref_backend, ref_info = repeat("cgal_parallel", ref_fn)
         seq_runs = [
             {"total": r["sequential"], "cpu": r["sequential"], "gpu": 0.0}
@@ -2162,6 +2209,7 @@ def main():
                 tets,
             ), tm
 
+        _mark_running(args.json, results, name, "paragram")
         adjacency, offsets, status, adj_backend, status_hist, repair_stats, par_tets = (
             repeat("paragram", paragram_fn)
         )
@@ -2286,6 +2334,15 @@ def main():
                 )
             )
         for label, fn in runners:
+            if (name, label) in crashed:
+                msg = (
+                    "skipped: the process died during this measurement on the previous attempt "
+                    "(a crash inside the library, not an exception)"
+                )
+                sources.append(f"{label}: CRASHED ({msg})")
+                entry[f"{label}_error"] = msg
+                continue
+            _mark_running(args.json, results, name, label)
             try:
 
                 def method_fn(fn=fn):
@@ -2387,6 +2444,7 @@ def main():
         print_block(
             name, n, note, sources, columns, compares, status_hist, explanations, timing
         )
+        results.pop("_in_progress", None)
         results[name] = entry
         if args.json:
             _save_json(args.json, results, complete=False)

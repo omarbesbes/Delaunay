@@ -54,7 +54,9 @@ BASELINE=${BASELINE:-1}                          # 0 = skip the uncorrected-Para
 BASELINE_REPEATS=${BASELINE_REPEATS:-3}
 JITTER=${JITTER:-1e-6}                           # 0 = skip the jittered pass
 JITTER_REPEATS=${JITTER_REPEATS:-$REPEATS}
-OUT=results/$SLURM_JOB_ID
+# OUT can point at the directory of an earlier job to continue it: every pass runs with --resume,
+# so the datasets already in its JSON files are kept and only the missing ones are measured.
+OUT=${OUT:-results/$SLURM_JOB_ID}
 mkdir -p "$OUT"
 
 # ---- GPU diagnostics -----------------------------------------------------------------------
@@ -177,15 +179,35 @@ COMMON="--unit-cube --repeats $REPEATS --slow-repeats 2 --slow-threshold 100 --v
 echo "== warm-up: JIT-compile Paragram's CUDA extension"
 python -c "import torch, paragram; d = paragram.voronoi_diagram(torch.rand(10000, 3, device='cuda'), bbox_pad=10.0); print('paragram ready, status ok:', int((d.status == 0).sum()), '/ 10000')"
 
+# A method can crash the interpreter instead of raising (gDel3D has aborted and segfaulted on
+# 20k-point inputs), which would end the pass and lose every remaining dataset.  Each pass is
+# therefore restarted up to ATTEMPTS times with --resume: finished datasets are kept and the
+# measurement that killed the process is skipped.
+ATTEMPTS=${ATTEMPTS:-4}
+run_pass() {  # run_pass <log-name> <json> <extra args...>
+  local name=$1 json=$2
+  shift 2
+  for attempt in $(seq 1 "$ATTEMPTS"); do
+    echo "-- $name (attempt $attempt/$ATTEMPTS)"
+    if python test_delaunay_surfaces.py $COMMON "$@" --resume --json "$json" 2>&1 \
+        | tee -a "$OUT/$name.log"; then
+      return 0
+    fi
+    echo "   $name: the process died; resuming without that measurement"
+  done
+  echo "   $name: gave up after $ATTEMPTS attempts; the JSON holds what completed"
+  return 0
+}
+
 echo "== corrected Paragram (pad 10x, CPU repair) + gDel3D + gStar4D + Local DeWall + GeoDel + CGAL parallel/sequential"
-python test_delaunay_surfaces.py $COMMON --paragram-bbox-pad 10 --repair on --json "$OUT/results.json" 2>&1 | tee "$OUT/run.log"
+run_pass run "$OUT/results.json" --paragram-bbox-pad 10 --repair on
 
 REPORT_ARGS=("$OUT/results.json")
 
 if [ "$BASELINE" = "1" ]; then
   echo "== baseline Paragram (upstream box, no repair), $BASELINE_REPEATS repeats -- Paragram only, the others are unaffected"
-  python test_delaunay_surfaces.py $COMMON --repeats "$BASELINE_REPEATS" --paragram-bbox-pad -1 --repair off \
-    --gdel3d off --geodel off --gstar4d-bin "" --dewall-bin "" --json "$OUT/results_baseline.json" 2>&1 | tee "$OUT/run_baseline.log"
+  run_pass run_baseline "$OUT/results_baseline.json" --repeats "$BASELINE_REPEATS" \
+    --paragram-bbox-pad -1 --repair off --gdel3d off --geodel off --gstar4d-bin "" --dewall-bin ""
   REPORT_ARGS+=(--baseline "$OUT/results_baseline.json")
 else
   echo "== baseline Paragram pass skipped (BASELINE=0): only the corrected Paragram is measured"
@@ -193,8 +215,8 @@ fi
 
 if [ "$JITTER" != "0" ]; then
   echo "== jittered ($JITTER) run, $JITTER_REPEATS repeats -- same datasets without co-spherical degeneracies"
-  python test_delaunay_surfaces.py $COMMON --repeats "$JITTER_REPEATS" --jitter "$JITTER" \
-    --paragram-bbox-pad 10 --repair on --json "$OUT/results_jitter.json" 2>&1 | tee "$OUT/run_jitter.log"
+  run_pass run_jitter "$OUT/results_jitter.json" --repeats "$JITTER_REPEATS" --jitter "$JITTER" \
+    --paragram-bbox-pad 10 --repair on
   REPORT_ARGS+=(--jitter "$OUT/results_jitter.json")
 fi
 

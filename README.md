@@ -68,6 +68,8 @@ torch cu128, CGAL headers + TBB), so nothing depends on the cluster's module ver
    TOOL_TIMEOUT=120 sbatch run_ruche.sbatch   # allow a slow external tool 2 min (default 10 s)
    REPEATS=5 sbatch run_ruche.sbatch
    JITTER=0 sbatch run_ruche.sbatch           # skip the jittered pass
+   OUT=results/1832417 sbatch run_ruche.sbatch   # continue an earlier job's results
+
    squeue -u $USER                         # job state
    tail -f results/delaunay-bench.o<jobid> # live progress ([HH:MM:SS] lines: dataset, method, run i/N)
    ```
@@ -198,6 +200,12 @@ extension cache; the job does a warm-up call before timing.
 - Paragram's known limits: float32 cell clipping fails on sliver-shaped cells (`inconsistent_boundary`),
   loses edges silently on unbounded (hull) cells and on near-co-spherical input; the CPU repair fixes what
   is flagged or on the hull, and the report states what fraction of cells was recomputed on the CPU.
+- **gDel3D crashes the interpreter on some inputs** -- `Aborted (core dumped)` during the warm-up
+  on `torus-random` at 20 000 points, and a segfault at 22 000 points of `voronoi_iarpa_001` in the
+  scaling sweep, both after handling the same clouds at 100 000 points. A crash inside a library is
+  not an exception, so no `except` catches it: every pass therefore runs with `--resume` and is
+  restarted up to `ATTEMPTS=4` times, which keeps the datasets already measured, records the
+  measurement that killed the process as `CRASHED`, and continues with the rest.
 - Local DeWall is exact but very slow on near-co-spherical input (hundreds of seconds for 20k sphere
   points), so with the default `--tool-timeout 10` it is reported as failed on those datasets;
   raise the limit (`TOOL_TIMEOUT=120`) if those numbers matter.

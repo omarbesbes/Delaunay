@@ -48,6 +48,8 @@ def load(path):
     with open(path) as f:
         data = json.load(f)
     env = data.pop("_env", {})
+    for k in [k for k in data if k.startswith("_")]:
+        del data[k]  # bookkeeping keys such as _in_progress, written by --resume
     for (
         r
     ) in data.values():  # accept files written before the rename "ours" -> "paragram"
