@@ -146,8 +146,11 @@ def f(v, nd=3):
 
 
 def method_seconds(r, m):
+    """Mean total (GPU + CPU) per run.  primary(r)["seconds"] is already the total, so the
+    adjacency phase must not be added to it again."""
     if m == PRIMARY:
-        return r.get("adjacency_seconds", 0.0) + primary(r)["seconds"]
+        t = (r.get("timing") or {}).get("paragram") or {}
+        return t.get("mean", primary(r)["seconds"])
     return r[m]["seconds"] if m in r else float("nan")
 
 
