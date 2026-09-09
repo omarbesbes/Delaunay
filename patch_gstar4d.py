@@ -28,6 +28,10 @@ gStar4D is from 2013 and needs three things before it can be used in this benchm
 3. **An `sm_35` build.**  The CMakeLists hardcodes `-gencode arch=compute_35,code=sm_35` (dropped
    in CUDA 12) and uses `find_package(CUDA)`/`cuda_add_executable`, removed in CMake 4.  This
    script prints a plain nvcc command line instead (as patch_dewall.py does for Local DeWall).
+   That line compiles *every* source as CUDA (`-x cu`), including the four `.cpp` files: they
+   include `<thrust/count.h>` through `Geometry.h`, and a modern Thrust pulls CUB's device code
+   into the translation unit, so compiling them as plain host C++ fails with hundreds of errors
+   about `threadIdx` and `__syncthreads` being undeclared.
 
 `-fmad=false` in that command line is required, not cosmetic: `GDelShewchukDevice.h` implements
 Shewchuk's exact predicates on the GPU with Two_Product/Split, whose error-free transformations
@@ -208,8 +212,8 @@ def build_commands(
         # exact predicates: no FMA contraction, no fast math, and never -ffast-math from CFLAGS
         f"{cc} -O2 -fno-fast-math -ffp-contract=off -c {predicates} -o {obj}",
         (
-            f"nvcc -O3 -std=c++17 -DNDEBUG -fmad=false {gencode} {includes} "
-            f"-Xcompiler -Wno-unknown-pragmas {srcs} {obj} -o {out}"
+            f"nvcc -O3 -std=c++17 -DNDEBUG -fmad=false -Wno-deprecated-gpu-targets {gencode} "
+            f"{includes} -Xcompiler -Wno-unknown-pragmas {obj} -x cu {srcs} -o {out}"
         ),
     ]
 
