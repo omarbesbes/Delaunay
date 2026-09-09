@@ -136,7 +136,7 @@ Two things to know about the sizes:
 | symptom | cause | fix |
 |---|---|---|
 | `no kernel image is available for execution on the device` | the `cu128` torch wheel has kernels for sm_75/80/86/90/100/120 only, and a V100 is sm_70 | use `--partition=gpua100`, or `TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 REBUILD=1 bash setup_ruche.sh` |
-| `CUDA-capable device(s) is/are busy or unavailable` while `nvidia-smi` shows the GPU idle in Default mode | node-specific driver state | the job records the node in `results/unusable_nodes.txt` and resubmits itself with `--exclude=` (up to `RETRY_MAX=4`) |
+| `CUDA-capable device(s) is/are busy or unavailable` while `nvidia-smi` shows the GPU idle in Default mode | node-specific driver state | handled by `cuda_wait.sh`, which both jobs run before touching the GPU: it retries for a minute, then records the node in `results/unusable_nodes.txt` and resubmits the job with `--exclude=` (up to `RETRY_MAX=4`) |
 | `NVCC_PREPEND_FLAGS: unbound variable` | conda's `cuda-nvcc` activation script under `set -u` | handled: the scripts relax `set -u` around activation |
 | `fatal error: cuda_runtime_api.h` in torch's JIT build | conda keeps the CUDA headers in `targets/x86_64-linux/include`, which torch does not add for host code | handled: the scripts export `CPATH` / `LIBRARY_PATH` |
 | `ValueError: Unknown CUDA arch (10.1)` | torch's arch auto-detection on cu128 builds | handled: the job pins `TORCH_CUDA_ARCH_LIST` from `nvidia-smi --query-gpu=compute_cap` |
@@ -172,6 +172,8 @@ extension cache; the job does a warm-up call before timing.
 - `make_report.py` — Markdown report + charts from one or several JSON files.
 - `scaling_study.py`, `run_scaling.sbatch` — time vs number of points (2k .. 1M) for the two point
   clouds, with and without jitter; log-log diagram with fitted exponents, plus CSV.
+- `cuda_wait.sh` — waits for a usable CUDA context, and resubmits the job excluding the node when
+  one never appears (some Ruche GPU nodes accept a job and then refuse every context).
 - `check_gstar4d.py` — smoke-test gStar4D alone: its own generator, then random clouds, then
   subsamples of the PLY clouds, to separate a broken build from an input it cannot handle.
 - `voronoi_to_delaunay.py` — Voronoi adjacency → Delaunay tetrahedra (torch, GPU or CPU).

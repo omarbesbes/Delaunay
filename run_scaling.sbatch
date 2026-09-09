@@ -36,10 +36,16 @@ ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | he
 export TORCH_CUDA_ARCH_LIST=$ARCH
 export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-$WORKDIR/.cache/torch_extensions_sm${ARCH//./}}
 mkdir -p "$TORCH_EXTENSIONS_DIR"
-nvidia-smi --query-gpu=name,compute_cap,memory.total --format=csv,noheader
+echo "node: $(hostname -s)   CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+nvidia-smi --query-gpu=name,compute_cap,compute_mode,memory.total,memory.used --format=csv,noheader
 
 OUT=results/scaling-$SLURM_JOB_ID
 mkdir -p "$OUT"
+
+# Some nodes accept the job and then refuse every CUDA context: wait, and if it stays broken,
+# record the node and resubmit excluding it (see cuda_wait.sh).
+echo "== CUDA readiness"
+bash cuda_wait.sh run_scaling.sbatch || exit 1
 SIZES=${SIZES:-"2000:200000:10000 200000 300000:1000000:100000"}
 JITTERS=${JITTERS:-"0 1e-6"}
 METHODS=${METHODS:-"paragram gdel3d gstar4d dewall geodel cgal_parallel cgal_sequential"}
