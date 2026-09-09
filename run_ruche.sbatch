@@ -26,19 +26,49 @@ export CXX=${CXX:-x86_64-conda-linux-gnu-g++}
 export PARAGRAM_MAX_PLANES=128 PARAGRAM_MAX_VERTS=128     # Paragram build variant (JIT, first import)
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-# Paragram's CUDA extension is JIT-compiled in this job: pin the architecture to this node's GPU
-# (torch's auto-detection on cu128 builds can fail with "Unknown CUDA arch") and keep one build
-# cache per architecture so V100 and A100 jobs do not reuse each other's binary.
-ARCH=$(python -c "import torch; c = torch.cuda.get_device_capability(); print(f'{c[0]}.{c[1]}')")
+REPEATS=${REPEATS:-10}
+OUT=results/$SLURM_JOB_ID
+mkdir -p "$OUT"
+
+# ---- GPU diagnostics -----------------------------------------------------------------------
+{
+  echo "node: $(hostname)   CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+  nvidia-smi -L
+  nvidia-smi --query-gpu=index,name,compute_cap,compute_mode,memory.total,memory.used,driver_version --format=csv
+  echo "processes holding a GPU:"
+  nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+} 2>&1 | tee "$OUT/gpu.txt"
+
+# Compute capability read from nvidia-smi, which needs no CUDA context: torch's own auto-detection
+# can fail on cu128 builds ("Unknown CUDA arch").  One JIT cache per architecture, so that V100 and
+# A100 jobs never reuse each other's Paragram binary.
+ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
+[ -n "$ARCH" ] || { echo "could not read compute_cap from nvidia-smi; falling back to 8.0"; ARCH=8.0; }
 export TORCH_CUDA_ARCH_LIST=$ARCH
 export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-$WORKDIR/.cache/torch_extensions_sm${ARCH//./}}
 mkdir -p "$TORCH_EXTENSIONS_DIR"
 echo "GPU compute capability: $ARCH | torch extension cache: $TORCH_EXTENSIONS_DIR"
 
-REPEATS=${REPEATS:-10}
-OUT=results/$SLURM_JOB_ID
-mkdir -p "$OUT"
-nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv | tee "$OUT/gpu.txt"
+# The GPU can be momentarily unavailable (exclusive-process mode with a previous job's process still
+# holding it, or a driver still cleaning up), so wait for a usable context instead of crashing.
+echo "== waiting for a usable CUDA context"
+for attempt in $(seq 1 30); do
+  if python -c "import torch; torch.zeros(1, device='cuda'); torch.cuda.synchronize()" 2>/dev/null; then
+    echo "   CUDA context OK on attempt $attempt"
+    break
+  fi
+  if [ "$attempt" = 30 ]; then
+    echo "   FAILED: no usable CUDA context after 5 minutes. Diagnostics:"
+    nvidia-smi --query-gpu=compute_mode,memory.used --format=csv
+    nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+    python -c "import torch; torch.zeros(1, device='cuda')" || true
+    echo "   If compute_mode is Exclusive_Process and another PID holds the GPU, resubmit (possibly"
+    echo "   on another partition: --partition=gpu for V100, or gpu_test for a 1 h slot)."
+    exit 1
+  fi
+  echo "   attempt $attempt/30: GPU not usable yet, waiting 10 s"
+  sleep 10
+done
 
 DATASETS="--no-analytic --models"
 [ "${FULL:-0}" = "1" ] && DATASETS="--n 20000"
