@@ -39,10 +39,12 @@ CUDA_TARGET=$CONDA_PREFIX/targets/x86_64-linux
 [ -d "$CUDA_TARGET/lib/stubs" ] && export LIBRARY_PATH="${LIBRARY_PATH:+$LIBRARY_PATH:}$CUDA_TARGET/lib/stubs"
 echo "cuda_runtime_api.h: $(ls "$CUDA_TARGET/include/cuda_runtime_api.h" 2>/dev/null || ls "$CONDA_PREFIX/include/cuda_runtime_api.h" 2>/dev/null || echo NOT FOUND)"
 REPEATS=${REPEATS:-10}
-# gStar4D's star-consistency loop has no iteration cap and does not converge on every input, so a
-# tool that hangs is killed after this many seconds and reported as failed for that dataset.  The
-# warm-up run hits it first, so the cost of a method that cannot do a dataset is one timeout.
-TOOL_TIMEOUT=${TOOL_TIMEOUT:-600}
+# A run that takes longer than this is not of interest: the external tool (gStar4D, Local DeWall)
+# is killed and reported as failed for that dataset.  gStar4D's star-consistency loop has no
+# iteration cap and does not converge on every input; Local DeWall needs minutes on
+# near-co-spherical input.  The warm-up run hits the limit first, so a method that cannot do a
+# dataset costs one timeout, not one per repetition.
+TOOL_TIMEOUT=${TOOL_TIMEOUT:-120}
 OUT=results/$SLURM_JOB_ID
 mkdir -p "$OUT"
 
