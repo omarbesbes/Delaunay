@@ -162,10 +162,13 @@ extension cache; the job does a warm-up call before timing.
   of precision (now one 4-index line at 9 digits, enough to identify the points exactly); and it built only
   for `sm_35`. It is compiled with `-fmad=false`, without which the GPU-side Shewchuk predicates stop being
   exact. It also drops duplicate points, which the benchmark reports.
-- gStar4D's star-consistency phase (`processFacets`) loops until no star needs another insertion,
-  with no iteration cap, so on a hard input it can run for hours or never finish. `--tool-timeout`
-  bounds it: the method is then reported as failed on that dataset and the run continues. To see
-  what it is doing, run the binary directly with `-verbose -stats -timing`, which prints a
-  `Loop: N` line per iteration.
+- gStar4D is **unstable on the surface point clouds**, and `check_gstar4d.py` is how that was
+  established. It is not a build problem (100k uniform random points: 0.13 s, identical to CGAL,
+  its own self-checks passing) and not simply degeneracy: on `voronoi_iarpa_001` the same 100k
+  points either finish in 0.2-1.5 s or never finish, and which one happens flips with a 1e-6
+  perturbation or a change of grid size. The runs that do finish agree with CGAL. When it hangs it
+  hangs *before* the first star-consistency iteration, so it is not a runaway loop count but a
+  stall in the earlier phases (PBA grid, initial stars, missing-point collection). `--tool-timeout`
+  bounds it: the method is reported as failed for that dataset and the run continues.
 - GeoDel is the only CPU-parallel method besides CGAL, and gets the same core count as CGAL parallel
   (`--geodel-threads $SLURM_CPUS_PER_TASK`), so the two are directly comparable.

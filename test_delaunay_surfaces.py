@@ -1089,14 +1089,24 @@ def run_gstar4d(
                 if isinstance(exc.stdout, bytes)
                 else (exc.stdout or "")
             )
-            tail = (
-                out.decode(errors="replace")[-800:]
-                if isinstance(out, bytes)
-                else out[-800:]
-            )
+            partial = out.decode(errors="replace") if isinstance(out, bytes) else out
+            # Where it got stuck: with verbose=True the tool prints one "Loop: i" line per
+            # star-consistency iteration, so the absence of any means it never got that far.
+            seen = re.findall(r"^Loop:\s*(\d+)\s*$", partial, re.MULTILINE)
+            if seen:
+                where = (
+                    f"stuck in star-consistency loop {seen[-1]} ({len(seen)} printed)"
+                )
+            elif verbose:
+                where = (
+                    "stuck before the first star-consistency iteration (reading points, PBA "
+                    "grid, initial stars or missing-point collection)"
+                )
+            else:
+                where = "pass verbose=True to see which phase it reached"
             raise RuntimeError(
-                f"gStar4D did not finish within {timeout:.0f}s and was killed "
-                f"(its star-consistency loop has no iteration cap); last output: {tail!r}"
+                f"gStar4D did not finish within {timeout:.0f}s and was killed: {where}; "
+                f"last output: {partial[-400:]!r}"
             ) from exc
         wall = time.perf_counter() - t0
         if r.returncode != 0 or not os.path.exists(pout):

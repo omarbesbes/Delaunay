@@ -113,7 +113,8 @@ def case(
             points, binary, grid_size=grid, timeout=timeout, verbose=True
         )
     except Exception as exc:  # noqa: BLE001 - this is the thing being tested
-        print(f"FAILED: {str(exc)[:300]}")
+        msg = str(exc)
+        print(f"FAILED: {msg if len(msg) <= 420 else msg[:210] + ' ... ' + msg[-210:]}")
         return False
     msg = (
         f"OK  {secs:7.3f}s  tets={len(tets):<8d} loops={info.get('consistency_loops', '?'):<4} "
