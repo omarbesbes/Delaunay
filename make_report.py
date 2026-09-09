@@ -23,7 +23,12 @@ matplotlib.use("Agg")
 DEGENERATE_HINTS = ("not unique", "co-circular", "co-spherical")
 PRIMARY = "paragram"
 EXTRA_METHODS = [("gdel3d", "gDel3D"), ("dewall", "Local DeWall")]
-COLORS = {"paragram": "#4477aa", "gdel3d": "#228833", "dewall": "#aa3377", "ref": "#ee6677"}
+COLORS = {
+    "paragram": "#4477aa",
+    "gdel3d": "#228833",
+    "dewall": "#aa3377",
+    "ref": "#ee6677",
+}
 
 
 # ----------------------------------------------------------------------------------------
@@ -35,7 +40,9 @@ def load(path):
     with open(path) as f:
         data = json.load(f)
     env = data.pop("_env", {})
-    for r in data.values():  # accept files written before the rename "ours" -> "paragram"
+    for (
+        r
+    ) in data.values():  # accept files written before the rename "ours" -> "paragram"
         if PRIMARY not in r and "ours" in r:
             r[PRIMARY] = r["ours"]
         c = r.get("compare", {})
@@ -65,45 +72,63 @@ def failed_cells(row) -> int:
     return (row["n"] - h.get("success", 0)) if h else 0
 
 
+def _diff_classes(row, key="difference"):
+    d = row.get(key) or {}
+    return d.get("ref_only", {}), d.get("method_only", {})
+
+
 def verdict(row) -> str:
-    """Paragram + conversion vs reference.
-    IDENTICAL: same tetrahedra.  ADJACENCY ERRORS: empty-sphere violations or unrepaired failed
-    cells (the Paragram adjacency was incomplete/inconsistent; the conversion cannot repair that).
-    DEGENERATE: no violation but overlapping tets (non-manifold faces / volume excess), i.e.
-    co-spherical point groups where the triangulation is not unique.  MISMATCH: anything else."""
+    """Paragram + conversion vs the reference, named after what actually differs."""
     c, o = row["compare"], primary(row)
     rp = row.get("repair") or {}
     frac = rp.get("repaired_fraction", 0.0)
-    cpu = f" ({100 * frac:.0f}% of cells recomputed on the CPU)" if frac >= 0.05 else ""
+    cpu = f" [{100 * frac:.0f}% of cells recomputed on the CPU]" if frac >= 0.05 else ""
     if c["method_only"] == 0 and c["ref_only"] == 0:
         return "IDENTICAL" + cpu
+    ref_only, mine = _diff_classes(row)
+    missing, extra = c["ref_only"], c["method_only"]
     unrepaired = failed_cells(row) if not row.get("repair") else 0
     if o["delaunay_violations"] > 0 or unrepaired > 0:
-        return f"ADJACENCY ERRORS ({failed_cells(row)} failed cells{', repaired' if row.get('repair') else ''})"
-    if (
-        o["nonmanifold_faces"] > 0
-        or o["volume_rel_err"] > 1e-9
-        or any(h in row["note"] for h in DEGENERATE_HINTS)
-    ):
-        return "DEGENERATE input"
-    return "MISMATCH"
+        return (
+            f"ADJACENCY ERRORS ({o['delaunay_violations']} violations, {failed_cells(row)} failed cells)"
+            + cpu
+        )
+    # a difference dominated by co-spherical ties is legitimate, a deficit of "clean" tets is not
+    if missing and ref_only.get("clean", 0) >= max(1, 0.5 * missing):
+        pct = 100 * ref_only.get("volume_frac", 0.0)
+        return f"INCOMPLETE ({missing} tets missing, {pct:.1f}% of hull volume)" + cpu
+    if mine.get("tie", 0) or ref_only.get("tie", 0):
+        return f"TIE-BREAK ({missing} ref-only / {extra} extra, co-spherical)" + cpu
+    if o["nonmanifold_faces"] > 0:
+        return f"OVERLAPPING ({o['nonmanifold_faces']} non-manifold faces)" + cpu
+    return f"DIFFERS ({missing} missing / {extra} extra)" + cpu
 
 
 def method_verdict(row, m: str) -> str:
-    """Extra method vs reference.  Both are exact, so on generic input they must agree; on
-    co-spherical input both are valid but may break ties differently."""
+    """An extra method vs the reference: zero-volume tets first, then ties, then real errors."""
     if m not in row:
         return "FAILED" if f"{m}_error" in row else "-"
     c, g = row[f"compare_{m}"], row[m]
     if c["method_only"] == 0 and c["ref_only"] == 0:
         return "IDENTICAL"
-    d = row.get(f"difference_{m}", {})
-    flats = d.get("method_only", {}).get("flat", 0) if d else 0
-    if g["delaunay_violations"] == 0 and g["nonmanifold_faces"] == 0 and g["volume_rel_err"] < 1e-9:
-        return "VALID, differs (tie-break)" + (f", {flats} flat" if flats else "")
-    if g["delaunay_violations"] == 0 and flats and flats == c["method_only"] and c["ref_only"] == 0:
+    ref_only, mine = _diff_classes(row, f"difference_{m}")
+    flats, ties = mine.get("flat", 0), mine.get("tie", 0)
+    if (
+        g["delaunay_violations"] == 0
+        and flats
+        and flats >= 0.9 * c["method_only"]
+        and c["ref_only"] == 0
+    ):
         return f"VALID + {flats} zero-volume tets"
-    return "MISMATCH"
+    if g["delaunay_violations"] == 0 and (ties or ref_only.get("tie", 0)):
+        return f"TIE-BREAK ({c['ref_only']} ref-only / {c['method_only']} extra)"
+    if (
+        g["delaunay_violations"] == 0
+        and g["nonmanifold_faces"] == 0
+        and g["volume_rel_err"] < 1e-9
+    ):
+        return f"VALID, differs ({c['ref_only']} / {c['method_only']})"
+    return f"MISMATCH ({g['delaunay_violations']} violations)"
 
 
 def f(v, nd=3):
@@ -165,7 +190,9 @@ def summary_table(data) -> str:
 
 def timing_table(data) -> str:
     ex = methods_present(data)
-    seq = any("sequential_seconds" in (r.get("reference_info") or {}) for r in data.values())
+    seq = any(
+        "sequential_seconds" in (r.get("reference_info") or {}) for r in data.values()
+    )
     hdr = (
         "| dataset | N | adjacency + repair (s) | voronoi→delaunay (s) | Paragram total (s) | reference (s) "
         "| speed-up vs ref |"
@@ -225,7 +252,17 @@ def repeated_timing_table(data) -> str:
                     f"conversion (GPU) {f(t.get('conversion_gpu_mean'))}",
                 ]
             elif m == "gdel3d":
-                st = (r.get("gdel3d_info") or {}).get("stats_ms") or {}
+                info = r.get("gdel3d_info") or {}
+                ph = info.get("phases_seconds") or {}
+                if ph:
+                    extra = [f"{k} {v:.3f}" for k, v in ph.items()]
+                    if info.get("stats_note"):
+                        extra.append(f"({info['stats_note']})")
+                    else:
+                        extra.append(
+                            "(GPU: init/split/flip/relocate/sort; CPU: splaying + copy-back)"
+                        )
+                st = {}
                 if st:
                     extra = [
                         f"{k.replace('Time', '')} {st[k] / 1000:.3f}"
@@ -422,12 +459,17 @@ def charts(data, stem: str) -> list[str]:
     ref = ref_name(data)
 
     fig, ax = plt.subplots(figsize=(max(6, 0.7 * len(names)), 3.4))
-    series = [("Paragram", [data[n]["compare"]["jaccard"] for n in names], COLORS[PRIMARY])]
+    series = [
+        ("Paragram", [data[n]["compare"]["jaccard"] for n in names], COLORS[PRIMARY])
+    ]
     for m, lab in ex:
         series.append(
             (
                 lab,
-                [data[n][f"compare_{m}"]["jaccard"] if m in data[n] else 0 for n in names],
+                [
+                    data[n][f"compare_{m}"]["jaccard"] if m in data[n] else 0
+                    for n in names
+                ],
                 COLORS[m],
             )
         )
@@ -453,7 +495,13 @@ def charts(data, stem: str) -> list[str]:
     ]
     for m, lab in ex:
         series.append((lab, [method_seconds(data[n], m) for n in names], COLORS[m]))
-    series.append((f"reference ({ref})", [data[n]["ref"]["seconds"] for n in names], COLORS["ref"]))
+    series.append(
+        (
+            f"reference ({ref})",
+            [data[n]["ref"]["seconds"] for n in names],
+            COLORS["ref"],
+        )
+    )
     _grouped_bars(ax, x, series, log=True)
     ax.set_ylabel("seconds (log)")
     ax.set_xticks(x)
@@ -465,14 +513,20 @@ def charts(data, stem: str) -> list[str]:
     plt.close(fig)
 
     fig, axes = plt.subplots(1, 2, figsize=(max(8, 1.1 * len(names)), 3.4))
-    sides = [("Paragram", PRIMARY, COLORS[PRIMARY])] + [(lab, m, COLORS[m]) for m, lab in ex]
+    sides = [("Paragram", PRIMARY, COLORS[PRIMARY])] + [
+        (lab, m, COLORS[m]) for m, lab in ex
+    ]
     sides.append((ref, "ref", COLORS["ref"]))
     for ax, key, label in (
         (axes[0], "radius_ratio_mean", "mean radius ratio (1 = regular)"),
         (axes[1], "dihedral_min_deg", "min dihedral angle (deg, log)"),
     ):
         series = [
-            (lab, [data[n][m][key] if m in data[n] else float("nan") for n in names], col)
+            (
+                lab,
+                [data[n][m][key] if m in data[n] else float("nan") for n in names],
+                col,
+            )
             for lab, m, col in sides
         ]
         _grouped_bars(ax, x, series, log=(key == "dihedral_min_deg"))
@@ -497,9 +551,13 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("results")
-    ap.add_argument("--jitter", default=None, help="optional results JSON from a --jitter run")
     ap.add_argument(
-        "--baseline", default=None, help="optional results JSON of the uncorrected Paragram run"
+        "--jitter", default=None, help="optional results JSON from a --jitter run"
+    )
+    ap.add_argument(
+        "--baseline",
+        default=None,
+        help="optional results JSON of the uncorrected Paragram run",
     )
     ap.add_argument("-o", "--output", default="report.md")
     args = ap.parse_args()
@@ -512,9 +570,12 @@ def main():
     rel = [os.path.basename(p) for p in imgs]
 
     n_ident = sum(verdict(r).startswith("IDENTICAL") for r in data.values())
-    n_degen = sum(verdict(r) == "DEGENERATE input" for r in data.values())
+    n_degen = sum(
+        verdict(r).startswith(("TIE-BREAK", "OVERLAPPING")) for r in data.values()
+    )
     n_adj = sum(verdict(r).startswith("ADJACENCY") for r in data.values())
-    n_bad = sum(verdict(r) == "MISMATCH" for r in data.values())
+    n_incomplete = sum(verdict(r).startswith("INCOMPLETE") for r in data.values())
+    n_bad = sum(verdict(r).startswith("DIFFERS") for r in data.values())
     tot_failed = sum(failed_cells(r) for r in data.values())
     tot_viol = sum(primary(r)["delaunay_violations"] for r in data.values())
     pad = env.get("paragram_bbox_pad")
@@ -526,9 +587,17 @@ def main():
     if "paragram_bbox_pad" in env:
         settings = (
             f" Paragram settings: clipping pad = {pad}x extent"
-            + (" (legacy +1.0 absolute)" if (pad if pad is not None else -1) < 0 else "")
+            + (
+                " (legacy +1.0 absolute)"
+                if (pad if pad is not None else -1) < 0
+                else ""
+            )
             + f", failed-cell repair {env.get('repair')}"
-            + (f" (hull cells {env.get('repair_hull')})" if env.get("repair_hull") else "")
+            + (
+                f" (hull cells {env.get('repair_hull')})"
+                if env.get("repair_hull")
+                else ""
+            )
             + (
                 f", cell budget {env.get('paragram_max_planes')} planes / {env.get('paragram_max_verts')} vertices."
                 if env.get("paragram_max_planes")
@@ -546,31 +615,38 @@ def main():
         + "\n",
         "## Verdict\n",
         (
-            f"* **Paragram + conversion**: **{n_ident} / {len(data)}** datasets identical to {ref}; {n_degen} degenerate "
-            f"(co-spherical groups, both triangulations valid); {n_adj} with adjacency errors ({tot_failed} failed cells "
-            f"in total, {tot_viol} empty-sphere violations in the output); {n_bad} genuine conversion mismatches."
+            f"* **Paragram + conversion**: **{n_ident} / {len(data)}** datasets identical to {ref}; "
+            f"{n_incomplete} incomplete (tetrahedra missing because edges are absent from Paragram's adjacency); "
+            f"{n_degen} differing only by co-spherical tie-breaks or overlaps; {n_adj} with adjacency errors "
+            f"({tot_failed} failed cells in total, {tot_viol} empty-sphere violations in the output); "
+            f"{n_bad} otherwise different."
         ),
     ]
     for m, lab in ex:
         vs = [method_verdict(r, m) for r in data.values()]
         n_id = sum(v == "IDENTICAL" for v in vs)
-        n_ok = sum(v.startswith("VALID") for v in vs)
+        n_ok = sum(v.startswith(("VALID", "TIE-BREAK")) for v in vs)
         n_fail = sum(v == "FAILED" for v in vs)
-        n_mis = sum(v == "MISMATCH" for v in vs)
+        n_mis = sum(v.startswith("MISMATCH") for v in vs)
         flats = sum(
             (r.get(f"difference_{m}") or {}).get("method_only", {}).get("flat", 0)
             for r in data.values()
             if m in r
         )
         md.append(
-            f"* **{lab}**: **{n_id} / {len(data)}** identical to {ref}; {n_ok} valid but differing (tie-breaks on "
-            f"co-spherical input and/or zero-volume tets: {flats} flat tets in total); {n_mis} mismatches"
+            f"* **{lab}**: **{n_id} / {len(data)}** identical to {ref}; {n_ok} valid but differing "
+            f"({flats} zero-volume tetrahedra in total, produced by symbolic perturbation on co-planar points, "
+            f"plus co-spherical tie-breaks); {n_mis} mismatches"
             + (f"; {n_fail} crashed." if n_fail else ".")
         )
     common = [r for r in data.values() if all(m in r for m, _ in ex)]
     if common:
-        parts = [f"Paragram + conversion {sum(method_seconds(r, PRIMARY) for r in common):.2f} s"]
-        parts += [f"{lab} {sum(r[m]['seconds'] for r in common):.2f} s" for m, lab in ex]
+        parts = [
+            f"Paragram + conversion {sum(method_seconds(r, PRIMARY) for r in common):.2f} s"
+        ]
+        parts += [
+            f"{lab} {sum(r[m]['seconds'] for r in common):.2f} s" for m, lab in ex
+        ]
         parts.append(f"{ref} {sum(r['ref']['seconds'] for r in common):.2f} s")
         md.append(
             f"* Wall time over the {len(common)} datasets all methods ran on: "
@@ -650,7 +726,9 @@ def main():
                 if m == "gdel3d":
                     extra = f", self-check={info.get('self_check')}, dead tets removed={info.get('dead_tets', 'n/a')}"
                 if m == "dewall":
-                    st = ", ".join(f"{k}={v}" for k, v in (info.get("status") or {}).items())
+                    st = ", ".join(
+                        f"{k}={v}" for k, v in (info.get("status") or {}).items()
+                    )
                     extra = f", gpu {info.get('gpu_seconds', float('nan')):.3f}s" + (
                         f", status {st}" if st else ""
                     )

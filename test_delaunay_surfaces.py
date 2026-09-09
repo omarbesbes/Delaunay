@@ -739,11 +739,34 @@ def run_gdel3d(points: np.ndarray) -> tuple[np.ndarray, float, dict]:
     ):  # phase timers (ms): GPU init/split/flip/relocate/sort, CPU splaying
         st = {k: float(v) for k, v in dict(out.get_stats()).items()}
         info["stats_ms"] = st
-        gpu_keys = ("initTime", "splitTime", "flipTime", "relocateTime", "sortTime")
-        info["gpu_seconds"] = sum(st.get(k, 0.0) for k in gpu_keys) / 1000.0
-        info["cpu_seconds"] = (
-            st.get("splayingTime", 0.0) + st.get("outTime", 0.0)
-        ) / 1000.0
+        info["self_reported_total_seconds"] = st.get("totalTime", float("nan")) / 1000.0
+        # This build only fills totalTime; the per-phase fields can hold uninitialised values
+        # (e.g. initTime = 9.4e4 ms for a 0.4 s run), so accept a phase only if it is consistent
+        # with the measured wall time.
+        cap = 2.0 * seconds + 0.05
+        ok = {
+            k: v / 1000.0
+            for k, v in st.items()
+            if k.endswith("Time") and 0.0 <= v / 1000.0 <= cap
+        }
+        cpu = ok.get("splayingTime", 0.0) + ok.get("outTime", 0.0)
+        gpu_phases = [
+            ok[k]
+            for k in ("initTime", "splitTime", "flipTime", "relocateTime", "sortTime")
+            if k in ok
+        ]
+        info["phases_seconds"] = {
+            k.replace("Time", ""): v for k, v in ok.items() if k != "totalTime"
+        }
+        if len(gpu_phases) >= 4:
+            info["gpu_seconds"] = sum(gpu_phases)
+            info["cpu_seconds"] = cpu
+        else:
+            info["gpu_seconds"] = max(0.0, seconds - cpu)
+            info["cpu_seconds"] = cpu
+            info["stats_note"] = (
+                "per-phase timers not filled by this gDel3D build; GPU = wall - CPU phases"
+            )
     try:  # gDel3D's own checker (Euler, adjacency, orientation, empty sphere); it skips dead tets
         with _silence_fds():
             info["self_check"] = bool(out.check_correctness(pts))
@@ -1624,6 +1647,7 @@ def main():
                     )
                 i += 1
             timing[label] = summarize_runs(runs)
+            timing[label]["raw_runs"] = runs
             log(
                 f"{name}: {label} mean {timing[label]['mean']:.3f}s over {len(runs)} run(s)"
             )
@@ -1638,13 +1662,14 @@ def main():
             return (r, backend, info), tm
 
         ref, ref_backend, ref_info = repeat("cgal_parallel", ref_fn)
-        if "sequential_mean" in timing["cgal_parallel"]:
-            seq_runs = [
-                {"total": s, "cpu": s, "gpu": 0.0}
-                for s in [timing["cgal_parallel"]["sequential_mean"]]
-            ]
+        seq_runs = [
+            {"total": r["sequential"], "cpu": r["sequential"], "gpu": 0.0}
+            for r in timing["cgal_parallel"]["raw_runs"]
+            if "sequential" in r
+        ]
+        if seq_runs:  # the same tool with CGAL_THREADS=1, timed in every repetition
             timing["cgal_sequential"] = summarize_runs(seq_runs)
-            timing["cgal_sequential"]["runs"] = timing["cgal_parallel"]["runs"]
+            timing["cgal_sequential"]["raw_runs"] = seq_runs
         t_ref = timing["cgal_parallel"]["mean"]
 
         # ---- Paragram adjacency (+ repair) + conversion ------------------------------------
@@ -1677,6 +1702,8 @@ def main():
                     offsets,
                     status,
                     include_hull=args.repair_hull == "on",
+                    # points must still count as on a hull facet after the jitter moved them
+                    hull_tol=max(1e-6, 5.0 * args.jitter),
                 )
                 t_cpu_repair = repair_stats["seconds"]
                 if repair_stats["repaired_cells"] == 0:
@@ -1845,26 +1872,23 @@ def main():
                         f"{cmp_o['ref_only']} ref-only]"
                     )
                 sources.append(_fmt_method_info(label, m_info) + note_m)
-                if label == "gdel3d" and m_info.get("stats_ms"):
-                    st = m_info["stats_ms"]
+                if label == "gdel3d":
+                    ph = m_info.get("phases_seconds") or {}
+                    gpu_ph = " ".join(
+                        f"{k} {ph[k]:.3f}"
+                        for k in ("init", "split", "flip", "relocate", "sort")
+                        if k in ph
+                    )
+                    cpu_ph = " ".join(
+                        f"{k} {ph[k]:.3f}" for k in ("splaying", "out") if k in ph
+                    )
                     timing[label]["breakdown"] = (
-                        "GPU: "
-                        + " ".join(
-                            f"{k.replace('Time', '')} {st[k] / 1000:.3f}"
-                            for k in (
-                                "initTime",
-                                "splitTime",
-                                "flipTime",
-                                "relocateTime",
-                                "sortTime",
-                            )
-                            if k in st
-                        )
-                        + " | CPU: "
-                        + " ".join(
-                            f"{k.replace('Time', '')} {st[k] / 1000:.3f}"
-                            for k in ("splayingTime", "outTime")
-                            if k in st
+                        (f"GPU: {gpu_ph} | " if gpu_ph else "")
+                        + (f"CPU: {cpu_ph}" if cpu_ph else "CPU: -")
+                        + (
+                            f"  [{m_info['stats_note']}]"
+                            if m_info.get("stats_note")
+                            else ""
                         )
                     )
                 if label == "dewall":
