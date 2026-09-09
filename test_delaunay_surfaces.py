@@ -1043,6 +1043,7 @@ def run_gstar4d(
     facet_max: int | None = None,
     check: bool = False,
     timeout: float | None = None,
+    verbose: bool = False,
 ) -> tuple[np.ndarray, float, dict]:
     """gStar4D (Nanjappa 2013, https://github.com/ashwin/gStar4D) through its command-line tool,
     built from source with patch_gstar4d.py.  GPU only: a discrete Voronoi diagram (PBA) seeds one
@@ -1075,6 +1076,8 @@ def run_gstar4d(
             cmd += ["-f", str(facet_max)]
         if check:
             cmd += ["-check"]
+        if verbose:  # prints one "Loop: i" line per star-consistency iteration
+            cmd += ["-verbose"]
         t0 = time.perf_counter()
         try:
             r = subprocess.run(
@@ -1116,6 +1119,9 @@ def run_gstar4d(
         if m:
             phases[label] = float(m.group(1)) / 1000.0  # the tool prints milliseconds
     info["self_reported_total_seconds"] = phases.get("total")
+    loops = re.findall(r"^Loop:\s*(\d+)\s*$", out, re.MULTILINE)
+    if loops:  # only with verbose=True; the last one is the iteration that converged
+        info["consistency_loops"] = int(loops[-1]) + 1
     # Every phase of gStar4D runs on the GPU (its own timers wrap cudaDeviceSynchronize).  Reading
     # the input file, writing the PLY and spawning the process are outside those timers and are an
     # artefact of the command-line interface, so they are accounted separately as io_seconds.

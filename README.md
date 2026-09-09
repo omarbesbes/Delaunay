@@ -76,6 +76,16 @@ torch cu128, CGAL headers + TBB), so nothing depends on the cluster's module ver
    every dataset, so partial results survive a crash), `run*.log` (full console output).
    Copy them back with `scp -r <user>@ruche...:$WORKDIR/Delaunay/results/<jobid> .`
 
+Is gStar4D working at all? It is the one method that can hang (see the notes at the end), so it
+has its own check — on a GPU node, with the environment active:
+```bash
+python check_gstar4d.py --sizes 1000 5000 20000 100000 --ply data/*.ply --timeout 120
+```
+Stage [1] runs the tool's own point generator, with none of this benchmark's code: a timeout there
+means the build or the CUDA-12 port is broken. Stages [2] and [3] go through the benchmark's runner
+and compare every tetrahedron against the reference, so a timeout only in [3] means gStar4D does
+not converge on that input. `loops` is the number of star-consistency iterations it needed.
+
 Quick interactive test on a GPU node (1 h partition):
 ```bash
 srun --partition=gpu_test --gres=gpu:1 --cpus-per-task=8 --mem=32G --time=00:30:00 --pty bash
@@ -125,6 +135,8 @@ extension cache; the job does a warm-up call before timing.
 
 - `test_delaunay_surfaces.py` — the benchmark driver (datasets, methods, metrics, JSON).
 - `make_report.py` — Markdown report + charts from one or several JSON files.
+- `check_gstar4d.py` — smoke-test gStar4D alone: its own generator, then random clouds, then
+  subsamples of the PLY clouds, to separate a broken build from an input it cannot handle.
 - `voronoi_to_delaunay.py` — Voronoi adjacency → Delaunay tetrahedra (torch, GPU or CPU).
 - `paragram_repair.py` — exact CPU fallback for Paragram's failed / hull cells.
 - `cgal_delaunay.cpp` — parallel CGAL Delaunay command-line tool.
