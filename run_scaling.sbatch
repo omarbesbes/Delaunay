@@ -56,9 +56,25 @@ echo "== warm-up: JIT-compile Paragram's CUDA extension"
 python -c "import torch, paragram; paragram.voronoi_diagram(torch.rand(10000, 3, device='cuda'), bbox_pad=10.0); print('paragram ready')"
 
 echo "== scaling sweep: sizes [$SIZES], jitters [$JITTERS], methods [$METHODS]"
-python scaling_study.py --ply $CLOUD --sizes $SIZES --jitter $JITTERS --methods $METHODS \
-  --repeats "$REPEATS" --threads "$SLURM_CPUS_PER_TASK" \
-  --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
-  --json "$OUT/scaling.json" --csv "$OUT/scaling.csv" --plot "$OUT/scaling.png" \
-  2>&1 | tee "$OUT/scaling.log"
-echo "== done: $OUT/scaling.png (and scaling.csv / scaling.json)"
+# One process per method, so a library that crashes the interpreter (gDel3D has been seen to
+# segfault on some inputs) only ends its own sweep.  Each process is restarted up to ATTEMPTS
+# times with --resume, which keeps the measurements already written and marks the input that
+# killed the previous process as failed instead of running into it again.
+ATTEMPTS=${ATTEMPTS:-4}
+for m in $METHODS; do
+  for attempt in $(seq 1 "$ATTEMPTS"); do
+    echo "-- $m (attempt $attempt/$ATTEMPTS)"
+    if python scaling_study.py --ply $CLOUD --sizes $SIZES --jitter $JITTERS --methods "$m" \
+        --repeats "$REPEATS" --threads "$SLURM_CPUS_PER_TASK" --resume \
+        --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
+        --json "$OUT/scaling-$m.json" 2>&1 | tee -a "$OUT/scaling-$m.log"; then
+      break
+    fi
+    echo "   $m: the process died (exit $?); resuming past that measurement"
+  done
+done
+
+echo "== merging and plotting"
+python scaling_study.py --plot-only "$OUT"/scaling-*.json \
+  --csv "$OUT/scaling.csv" --plot "$OUT/scaling.png" 2>&1 | tee "$OUT/scaling.log"
+echo "== done: $OUT/scaling.png (and scaling.csv, scaling-<method>.json)"

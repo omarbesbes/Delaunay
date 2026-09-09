@@ -266,6 +266,24 @@ def measure(method: str, pts: np.ndarray, args) -> dict:
 # ----------------------------------------------------------------------------------------
 
 
+def record_key(rec: dict) -> tuple:
+    return (rec["cloud"], rec["n"], rec["jitter"], rec["method"])
+
+
+def load_previous(path: str) -> list[dict]:
+    """Records of an earlier run of this sweep.  A record still marked "running" belongs to a
+    measurement whose process died -- a segfault inside one of the libraries kills the whole
+    interpreter -- so it becomes an error and is not attempted again."""
+    if not path or not os.path.exists(path):
+        return []
+    with open(path) as fh:
+        old = json.load(fh).get("runs", [])
+    for rec in old:
+        if rec.pop("status", None) == "running":
+            rec["error"] = "the process died during this measurement (segfault or kill)"
+    return old
+
+
 def sweep(args) -> dict:
     clouds = {}
     for path in args.ply:
@@ -273,7 +291,10 @@ def sweep(args) -> dict:
         clouds[name] = T.unit_cube(T.load_ply_vertices(path))
         print(f"{name}: {len(clouds[name])} points", flush=True)
     sizes = parse_sizes(args.sizes)
-    records: list[dict] = []
+    records: list[dict] = load_previous(args.json) if args.resume else []
+    done = {record_key(r) for r in records}
+    if records:
+        print(f"resuming: {len(records)} measurement(s) already recorded", flush=True)
     env = {
         "date": time.strftime("%Y-%m-%d %H:%M:%S"),
         "sizes": sizes,
@@ -319,17 +340,27 @@ def sweep(args) -> dict:
                         "jitter": jit,
                         "method": m,
                     }
+                    if record_key(rec) in done:
+                        continue
                     if key in give_up:
                         rec["error"] = (
                             "skipped (this method already failed or exceeded --skip-above)"
                         )
                         records.append(rec)
+                        save()
                         continue
+                    # Mark the measurement before starting it: if the process dies inside a
+                    # library (gDel3D can segfault), --resume turns the marker into an error and
+                    # skips it instead of crashing again on the same input.
+                    rec["status"] = "running"
+                    records.append(rec)
+                    save()
                     print(
                         f"[{time.strftime('%H:%M:%S')}] {tag} {m}", end="", flush=True
                     )
                     try:
                         rec.update(measure(m, pts, args))
+                        rec.pop("status", None)
                         print(
                             f" -> {rec['seconds']:.3f}s ({rec['runs']} run(s))",
                             flush=True,
@@ -342,10 +373,10 @@ def sweep(args) -> dict:
                                 flush=True,
                             )
                     except Exception as exc:  # noqa: BLE001 - a failing method must not stop the sweep
+                        rec.pop("status", None)
                         rec["error"] = str(exc)[:400]
                         give_up.add(key)
                         print(f" -> FAILED: {rec['error'][:160]}", flush=True)
-                    records.append(rec)
                     save()
     save()
     return {"_env": env, "runs": records}
@@ -534,12 +565,29 @@ def main() -> int:
     ap.add_argument("--json", default="results/scaling.json")
     ap.add_argument("--csv", default=None, help="also write the records as CSV")
     ap.add_argument("--plot", default=None, help="write the log-log diagram here")
-    ap.add_argument("--plot-only", default=None, help="skip the sweep, plot this JSON")
+    ap.add_argument(
+        "--resume",
+        action="store_true",
+        help="keep the measurements already in --json and run only the missing ones; a "
+        "measurement whose process died is recorded as such and not retried",
+    )
+    ap.add_argument(
+        "--plot-only",
+        nargs="+",
+        default=None,
+        help="skip the sweep and plot these JSON files (several are merged, e.g. one per method)",
+    )
     args = ap.parse_args()
 
     if args.plot_only:
-        with open(args.plot_only) as fh:
-            payload = json.load(fh)
+        runs, envs = [], {}
+        for path in args.plot_only:
+            with open(path) as fh:
+                one = json.load(fh)
+            runs += one.get("runs", [])
+            envs.update(one.get("_env", {}))
+        payload = {"_env": envs, "runs": runs}
+        print(f"{len(runs)} measurement(s) from {len(args.plot_only)} file(s)")
     else:
         if not args.ply:
             print("nothing to do: pass --ply data/*.ply")

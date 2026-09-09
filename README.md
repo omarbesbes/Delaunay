@@ -130,6 +130,13 @@ Two things to know about the sizes:
 * A method that fails, times out, or exceeds `--skip-above` (default 60 s) at some size is not
   measured at larger sizes, and its records say so. That keeps CGAL sequential and Paragram's
   global-CGAL repair from consuming the whole job at 1M points.
+* **Each method sweeps in its own process** (`scaling-<method>.json`, merged for the plot), because
+  a library can crash the interpreter rather than raise: gDel3D has been seen to segfault on a
+  22k-point subsample after handling 2k, 12k and 100k fine. Every measurement is marked in the
+  JSON before it starts, so the automatic restart (`--resume`, up to `ATTEMPTS=4` per method)
+  records the input that killed the process as failed and carries on with the next size instead of
+  running into it again. To rebuild the diagram from whatever finished:
+  `python scaling_study.py --plot-only results/scaling-<jobid>/scaling-*.json --plot mine.png`.
 
 ## Troubleshooting (observed on Ruche)
 
