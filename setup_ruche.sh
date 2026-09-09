@@ -44,9 +44,25 @@ echo "python: $(python -V) | nvcc: $(nvcc --version | tail -1) | host compiler: 
 echo "== [2/7] python packages (torch cu128, numpy, scipy, matplotlib, cgal bindings)"
 # cu128 wheels have no Volta (sm_70) kernels: for the V100 partitions (gpu, gpu_test) install
 # the cu126 build instead with  TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 bash setup_ruche.sh
-pip install -q torch --index-url "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
+PIP_FORCE=""
+[ "${REBUILD:-0}" = "1" ] && PIP_FORCE="--force-reinstall"
+pip install -q $PIP_FORCE torch --index-url "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
 pip install -q numpy scipy matplotlib certifi cgal ninja packaging rich
-python -c "import torch, CGAL.CGAL_Triangulation_3; print('torch', torch.__version__, '| CUDA', torch.version.cuda, '| GPU archs', torch.cuda.get_arch_list(), '| CGAL bindings OK')"
+python - <<'PY'
+import torch
+
+import CGAL.CGAL_Triangulation_3  # noqa: F401
+
+archs = torch.cuda.get_arch_list()
+print("torch", torch.__version__, "| CUDA", torch.version.cuda, "| CGAL bindings OK")
+print("torch has kernels for:", archs)
+if "sm_70" not in archs:
+    print(
+        "NOTE: no sm_70 kernels -> the V100 partitions (gpu, gpu_test) cannot run Paragram or gDel3D\n"
+        "      with this build. Use --partition=gpua100 (A100, sm_80), or reinstall with\n"
+        "        TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 REBUILD=1 bash setup_ruche.sh"
+    )
+PY
 
 echo "== [3/7] parallel CGAL tool (cgal_delaunay)"
 $CXX -O3 -std=c++17 -pthread -DCGAL_LINKED_WITH_TBB -I"$CONDA_PREFIX/include" cgal_delaunay.cpp \
@@ -62,14 +78,14 @@ PY
 echo "== [4/7] Paragram (patched: relative clipping pad, cell budget)"
 [ -d third_party/paragram ] || git clone -q --recursive https://github.com/zenseact/paragram.git third_party/paragram
 python patch_paragram.py third_party/paragram
-pip install -q third_party/paragram
+pip install -q $PIP_FORCE --no-deps third_party/paragram
 python -c "import paragram, inspect; print('paragram import OK; bbox_pad:', 'bbox_pad' in inspect.signature(paragram.voronoi_diagram).parameters)"
 echo "   (Paragram's CUDA extension is JIT-compiled at first use, inside the SLURM job on the GPU node)"
 
 echo "== [5/7] pyGDel3D (patched: dead-tet flags, phase timers, TORCH_CUDA_ARCH_LIST)"
 [ -d third_party/pyGDel3D ] || git clone -q https://github.com/half-potato/pyGDel3D.git third_party/pyGDel3D
 python patch_pygdel3d.py third_party/pyGDel3D
-pip install -q --no-build-isolation --no-deps third_party/pyGDel3D
+pip install -q $PIP_FORCE --no-build-isolation --no-deps third_party/pyGDel3D
 python -c "import gdel3d; print('pyGDel3D OK; get_stats:', hasattr(gdel3d.DelOutput, 'get_stats'))"
 
 echo "== [6/7] Local DeWall (patched for Linux; built for $ARCHS)"

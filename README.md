@@ -71,6 +71,19 @@ python test_delaunay_surfaces.py --no-analytic --models --ply data/*.ply --unit-
   --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --json results/test.json
 ```
 
+## Troubleshooting (observed on Ruche)
+
+| symptom | cause | fix |
+|---|---|---|
+| `no kernel image is available for execution on the device` | the `cu128` torch wheel has kernels for sm_75/80/86/90/100/120 only, and a V100 is sm_70 | use `--partition=gpua100`, or `TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 REBUILD=1 bash setup_ruche.sh` |
+| `CUDA-capable device(s) is/are busy or unavailable` while `nvidia-smi` shows the GPU idle in Default mode | node-specific driver state | the job records the node in `results/unusable_nodes.txt` and resubmits itself with `--exclude=` (up to `RETRY_MAX=4`) |
+| `NVCC_PREPEND_FLAGS: unbound variable` | conda's `cuda-nvcc` activation script under `set -u` | handled: the scripts relax `set -u` around activation |
+| `fatal error: cuda_runtime_api.h` in torch's JIT build | conda keeps the CUDA headers in `targets/x86_64-linux/include`, which torch does not add for host code | handled: the scripts export `CPATH` / `LIBRARY_PATH` |
+| `ValueError: Unknown CUDA arch (10.1)` | torch's arch auto-detection on cu128 builds | handled: the job pins `TORCH_CUDA_ARCH_LIST` from `nvidia-smi --query-gpu=compute_cap` |
+
+`bash diagnose_gpu.sh` prints the full picture on any GPU node: device files, compute mode, which `libcuda`
+is mapped, raw `cuInit` / `cudaMalloc` error codes, a tiny `nvcc`-built CUDA program, and torch's arch list.
+
 ## Options worth knowing
 
 ```
