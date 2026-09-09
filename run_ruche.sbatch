@@ -189,11 +189,12 @@ run_pass() {  # run_pass <log-name> <json> <extra args...>
   shift 2
   for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "-- $name (attempt $attempt/$ATTEMPTS)"
-    if python test_delaunay_surfaces.py $COMMON "$@" --resume --json "$json" 2>&1 \
-        | tee -a "$OUT/$name.log"; then
-      return 0
-    fi
-    echo "   $name: the process died; resuming without that measurement"
+    local rc=0
+    python test_delaunay_surfaces.py $COMMON "$@" --resume --json "$json" 2>&1 \
+      | tee -a "$OUT/$name.log" || rc=$?
+    [ "$rc" = 0 ] && return 0
+    # 134 = SIGABRT, 139 = SIGSEGV: the library killed the interpreter, not an exception
+    echo "   $name: the process died (exit $rc); resuming without that measurement"
   done
   echo "   $name: gave up after $ATTEMPTS attempts; the JSON holds what completed"
   return 0

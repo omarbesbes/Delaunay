@@ -64,13 +64,14 @@ ATTEMPTS=${ATTEMPTS:-4}
 for m in $METHODS; do
   for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "-- $m (attempt $attempt/$ATTEMPTS)"
-    if python scaling_study.py --ply $CLOUD --sizes $SIZES --jitter $JITTERS --methods "$m" \
-        --repeats "$REPEATS" --threads "$SLURM_CPUS_PER_TASK" --resume \
-        --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
-        --json "$OUT/scaling-$m.json" 2>&1 | tee -a "$OUT/scaling-$m.log"; then
-      break
-    fi
-    echo "   $m: the process died (exit $?); resuming past that measurement"
+    rc=0
+    python scaling_study.py --ply $CLOUD --sizes $SIZES --jitter $JITTERS --methods "$m" \
+      --repeats "$REPEATS" --threads "$SLURM_CPUS_PER_TASK" --resume \
+      --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
+      --json "$OUT/scaling-$m.json" 2>&1 | tee -a "$OUT/scaling-$m.log" || rc=$?
+    [ "$rc" = 0 ] && break
+    # 134 = SIGABRT, 139 = SIGSEGV: the library killed the interpreter, not an exception
+    echo "   $m: the process died (exit $rc); resuming past that measurement"
   done
 done
 
