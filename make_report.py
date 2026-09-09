@@ -68,7 +68,13 @@ def primary(r):
 
 
 def methods_present(data) -> list[tuple[str, str]]:
-    return [(m, lab) for m, lab in EXTRA_METHODS if any(m in r for r in data.values())]
+    # A method that only ever failed still gets a column, so a crash or a timeout is visible
+    # rather than silently absent.
+    return [
+        (m, lab)
+        for m, lab in EXTRA_METHODS
+        if any(m in r or f"{m}_error" in r for r in data.values())
+    ]
 
 
 def ref_name(data) -> str:
@@ -407,27 +413,44 @@ def output_methods(data):
 
 def short_status(r, m) -> str:
     """One cell: how this method's tetrahedra compare with the reference on this dataset."""
+    note = ""
     if m == PRIMARY:
         if m not in r and "paragram_error" in r:
             return "failed"
         v, c = verdict(r), r["compare"]
+        # Paragram's repair recomputes failed and hull cells with exact CPU arithmetic, and falls
+        # back to one global CGAL triangulation when it cannot certify local patches.  When that
+        # covers most of the points, "identical to CGAL" says nothing about Paragram, so the share
+        # travels with every status.
+        frac = (r.get("repair") or {}).get("repaired_fraction", 0.0)
+        if frac >= 0.5:
+            note = f" (**{100 * frac:.0f}% from the CPU fallback**)"
+        elif frac >= 0.05:
+            note = f" ({100 * frac:.0f}% CPU)"
     else:
         if m not in r:
-            return "timeout / failed" if f"{m}_error" in r else "-"
+            if f"{m}_error" not in r:
+                return "-"
+            err = r[f"{m}_error"]
+            if "did not finish within" in err:
+                return "timeout"
+            return (
+                "**crashed**" if ("assert" in err or "exit code" in err) else "failed"
+            )
         v, c = method_verdict(r, m), r[f"compare_{m}"]
     if v.startswith("IDENTICAL"):
-        return "**identical**"
+        return "**identical**" + note
     flat = (r.get(f"difference_{m}") if m != PRIMARY else r.get("difference")) or {}
     flats = (flat.get("method_only") or {}).get("flat", 0)
     if v.startswith("VALID +") and flats:
-        return f"+{flats} flat"
+        return f"+{flats} flat" + note
     if v.startswith("INCOMPLETE"):
-        return f"-{c['ref_only']} missing"
+        return f"-{c['ref_only']} missing" + note
     if v.startswith("TIE-BREAK"):
-        return f"ties ({c['ref_only']}/{c['method_only']})"
+        return f"ties ({c['ref_only']}/{c['method_only']})" + note
     if v.startswith(("ADJACENCY", "MISMATCH")):
-        return f"**wrong** ({c['ref_only']}/{c['method_only']})"
-    return f"differs ({c['ref_only']}/{c['method_only']})"
+        return f"**wrong** ({c['ref_only']}/{c['method_only']})" + note
+    return f"differs ({c['ref_only']}/{c['method_only']})" + note
 
 
 def scoreboard(data) -> str:
@@ -502,6 +525,17 @@ def scoreboard(data) -> str:
             why.append(f"timed out on {len(failed)} dataset(s)")
         if viol:
             why.append(f"**{viol} empty-sphere violations**")
+        if m == PRIMARY:
+            fracs = [
+                (r.get("repair") or {}).get("repaired_fraction", 0.0)
+                for r in data.values()
+            ]
+            if fracs and statistics.median(fracs) >= 0.05:
+                why.append(
+                    f"median {100 * statistics.median(fracs):.0f}% of cells recomputed exactly "
+                    "on the CPU (up to "
+                    f"{100 * max(fracs):.0f}%)"
+                )
         rows.append(
             f"| {outs.get(m, SHORT_LABELS[m])} | {len(times)} / {len(data)} | "
             f"**{n_id} / {len(data)}** | {f(med)} | {speed} | "
