@@ -11,6 +11,7 @@
 # Usage:  sbatch run_ruche.sbatch                 (your two point clouds, 10 repeats)
 #         FULL=1 sbatch run_ruche.sbatch          (also analytic surfaces + meshes, 20k samples each)
 #         REPEATS=5 sbatch run_ruche.sbatch
+#         TOOL_TIMEOUT=300 sbatch run_ruche.sbatch   (kill a hanging external tool sooner)
 # Methods: Paragram + conversion (GPU), gDel3D (GPU), gStar4D (GPU), Local DeWall (GPU),
 #          GeoDel / Geogram (CPU-parallel), CGAL parallel (TBB) and CGAL sequential.
 set -euo pipefail
@@ -38,6 +39,10 @@ CUDA_TARGET=$CONDA_PREFIX/targets/x86_64-linux
 [ -d "$CUDA_TARGET/lib/stubs" ] && export LIBRARY_PATH="${LIBRARY_PATH:+$LIBRARY_PATH:}$CUDA_TARGET/lib/stubs"
 echo "cuda_runtime_api.h: $(ls "$CUDA_TARGET/include/cuda_runtime_api.h" 2>/dev/null || ls "$CONDA_PREFIX/include/cuda_runtime_api.h" 2>/dev/null || echo NOT FOUND)"
 REPEATS=${REPEATS:-10}
+# gStar4D's star-consistency loop has no iteration cap and does not converge on every input, so a
+# tool that hangs is killed after this many seconds and reported as failed for that dataset.  The
+# warm-up run hits it first, so the cost of a method that cannot do a dataset is one timeout.
+TOOL_TIMEOUT=${TOOL_TIMEOUT:-600}
 OUT=results/$SLURM_JOB_ID
 mkdir -p "$OUT"
 
@@ -154,7 +159,8 @@ DATASETS="--no-analytic --models"
 [ "${FULL:-0}" = "1" ] && DATASETS="--n 20000"
 COMMON="--unit-cube --repeats $REPEATS --slow-repeats 2 --slow-threshold 100 --verbose \
   --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
-  --geodel auto --geodel-threads $SLURM_CPUS_PER_TASK --ply data/*.ply $DATASETS"
+  --geodel auto --geodel-threads $SLURM_CPUS_PER_TASK --tool-timeout $TOOL_TIMEOUT \
+  --ply data/*.ply $DATASETS"
 
 echo "== warm-up: JIT-compile Paragram's CUDA extension"
 python -c "import torch, paragram; d = paragram.voronoi_diagram(torch.rand(10000, 3, device='cuda'), bbox_pad=10.0); print('paragram ready, status ok:', int((d.status == 0).sum()), '/ 10000')"

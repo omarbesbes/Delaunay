@@ -63,6 +63,7 @@ torch cu128, CGAL headers + TBB), so nothing depends on the cluster's module ver
    any of the partitions.)
    ```bash
    sbatch run_ruche.sbatch                 # the two point clouds, 10 timed repeats per method
+   TOOL_TIMEOUT=300 sbatch run_ruche.sbatch   # kill a hanging external tool after 5 min (default 600 s)
    FULL=1 sbatch run_ruche.sbatch          # + analytic surfaces and meshes (20k samples each)
    REPEATS=5 sbatch run_ruche.sbatch
    squeue -u $USER                         # job state
