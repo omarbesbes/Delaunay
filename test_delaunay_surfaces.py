@@ -93,8 +93,11 @@ TIMING_LABELS = {
 def format_timing_table(timing: dict, indent: str = "   ") -> str:
     """Per-method wall time over the repeated runs plus the CPU / GPU split and phase breakdown."""
     lines = [
-        f"{indent}timing over repeated runs (seconds):",
-        f"{indent}  {'method':16s} {'runs':>4s} {'mean':>9s} {'std':>8s} {'min':>9s} {'GPU':>9s} {'CPU':>9s}  breakdown",
+        f"{indent}timing over repeated runs (seconds; mean = GPU + CPU, excl.I/O is measured but NOT in the mean):",
+        (
+            f"{indent}  {'method':16s} {'runs':>4s} {'mean':>9s} {'std':>8s} {'min':>9s} {'GPU':>9s} "
+            f"{'CPU':>9s} {'excl.I/O':>9s}  breakdown"
+        ),
     ]
     for label in ("paragram", "gdel3d", "dewall", "cgal_parallel", "cgal_sequential"):
         t = timing.get(label)
@@ -102,10 +105,12 @@ def format_timing_table(timing: dict, indent: str = "   ") -> str:
             continue
         gpu = t.get("gpu_mean")
         cpu = t.get("cpu_mean")
+        io = t.get("io_mean")
         lines.append(
             f"{indent}  {TIMING_LABELS[label]:16s} {t['runs']:4d} {t['mean']:9.4f} {t['std']:8.4f} {t['min']:9.4f} "
             f"{(f'{gpu:9.4f}' if gpu is not None else '        -')} "
-            f"{(f'{cpu:9.4f}' if cpu is not None else '        -')}  {t.get('breakdown', '')}"
+            f"{(f'{cpu:9.4f}' if cpu is not None else '        -')} "
+            f"{(f'{io:9.4f}' if io is not None else '        -')}  {t.get('breakdown', '')}"
         )
     return "\n".join(lines)
 
@@ -584,6 +589,9 @@ def _cgal_binary(points: np.ndarray, binary: str) -> tuple[np.ndarray, str, dict
                 info[k] = float(v) if "." in v else int(v)
             except ValueError:
                 info[k] = v
+    info["io_seconds"] = max(
+        0.0, wall - (info.get("build_seconds", 0.0) + info.get("extract_seconds", 0.0))
+    )
     label = (
         f"CGAL {info.get('cgal', '')} "
         + ("parallel" if info.get("parallel") else "sequential")
@@ -840,9 +848,11 @@ def run_dewall(
     info["phases_seconds"] = (
         phases  # every phase runs on the GPU (grid build, body, post-processing)
     )
-    info["cpu_seconds"] = max(
-        0.0, wall - info.get("gpu_seconds", wall)
-    )  # file parsing, normalisation
+    # The tool's compute time is what it reports itself; writing/parsing the 100k-line text file and
+    # spawning the process are an artefact of its command-line interface, so they are accounted
+    # separately as io_seconds instead of being called "CPU work" inside the total.
+    info["io_seconds"] = max(0.0, wall - info.get("gpu_seconds", wall))
+    info["cpu_seconds"] = 0.0
     status = {}
     for line in out.splitlines():
         mm = re.match(
@@ -1660,7 +1670,12 @@ def main():
         # ---- reference (CGAL parallel; the sequential build is timed alongside) ------------
         def ref_fn():
             r, backend, info = reference_delaunay(pts)
-            tm = {"total": info["seconds"], "cpu": info["seconds"], "gpu": 0.0}
+            tm = {
+                "total": info["seconds"],
+                "cpu": info["seconds"],
+                "gpu": 0.0,
+                "io": info.get("io_seconds"),
+            }
             if "sequential_seconds" in info:
                 tm["sequential"] = info["sequential_seconds"]
             return (r, backend, info), tm
@@ -1749,7 +1764,9 @@ def main():
         )
         if "cgal_parallel" in timing:
             thr = (ref_info or {}).get("threads", "?")
-            timing["cgal_parallel"]["breakdown"] = f"CPU only, {thr} threads (TBB)"
+            timing["cgal_parallel"]["breakdown"] = (
+                f"CPU only, {thr} threads (TBB); excl.I/O = binary point/tet file exchange"
+            )
         if "cgal_sequential" in timing:
             timing["cgal_sequential"]["breakdown"] = (
                 "CPU only, 1 thread (same tool, CGAL_THREADS=1)"
@@ -1847,6 +1864,7 @@ def main():
                         "total": secs_,
                         "gpu": info_.get("gpu_seconds"),
                         "cpu": info_.get("cpu_seconds"),
+                        "io": info_.get("io_seconds"),
                     }
                     return (tets_, secs_, info_), tm
 
@@ -1900,7 +1918,7 @@ def main():
                     timing[label]["breakdown"] = (
                         "GPU: "
                         + " ".join(f"{k} {v:.3f}" for k, v in ph.items())
-                        + " | CPU: file I/O + normalisation"
+                        + " | excl.I/O = text write+parse and process spawn (its CLI, not the algorithm)"
                     )
                 entry.update(
                     {

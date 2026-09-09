@@ -243,8 +243,8 @@ def repeated_timing_table(data) -> str:
     if not any(r.get("timing") for r in data.values()):
         return ""
     rows = [
-        "| dataset | method | runs | mean (s) | std (s) | min (s) | GPU (s) | CPU (s) | breakdown |",
-        "|" + "---|" * 9,
+        "| dataset | method | runs | mean (s) | std (s) | min (s) | GPU (s) | CPU (s) | excluded I/O (s) | breakdown |",
+        "|" + "---|" * 10,
     ]
     for name, r in data.items():
         for m, t in (r.get("timing") or {}).items():
@@ -294,7 +294,8 @@ def repeated_timing_table(data) -> str:
                 extra = ["CPU only"]
             rows.append(
                 f"| {name} | {TIMING_LABELS.get(m, m)} | {t['runs']} | {f(t['mean'])} | {f(t['std'])} | {f(t['min'])} | "
-                f"{f(gpu) if gpu is not None else '-'} | {f(cpu) if cpu is not None else '-'} | {'; '.join(extra)} |"
+                f"{f(gpu) if gpu is not None else '-'} | {f(cpu) if cpu is not None else '-'} | "
+                f"{f(t.get('io_mean')) if t.get('io_mean') is not None else '-'} | {'; '.join(extra)} |"
             )
     return "\n".join(rows)
 
@@ -682,6 +683,9 @@ def main():
         f"\n![Timing]({rel[1]})\n",
         "### Repeated timings and CPU / GPU breakdown\n",
         (
+            "mean = GPU + CPU. *Excluded I/O* is measured but deliberately not part of the mean: it is the "
+            "file exchange of the command-line tools (Local DeWall parses a 100k-line text file, CGAL exchanges "
+            "binary arrays), which a library integration would not pay. "
             "GPU = time spent in GPU phases as reported by the method itself (Paragram: adjacency + conversion, "
             "synchronised; gDel3D: its init/split/flip/relocate/sort timers; Local DeWall: its phase timers); "
             "CPU = host work (Paragram: exact repair of failed/hull cells; gDel3D: star splaying + copy-back; "
