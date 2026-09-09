@@ -26,6 +26,15 @@ export CXX=${CXX:-x86_64-conda-linux-gnu-g++}
 export PARAGRAM_MAX_PLANES=128 PARAGRAM_MAX_VERTS=128     # Paragram build variant (JIT, first import)
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+# Paragram's CUDA extension is JIT-compiled in this job: pin the architecture to this node's GPU
+# (torch's auto-detection on cu128 builds can fail with "Unknown CUDA arch") and keep one build
+# cache per architecture so V100 and A100 jobs do not reuse each other's binary.
+ARCH=$(python -c "import torch; c = torch.cuda.get_device_capability(); print(f'{c[0]}.{c[1]}')")
+export TORCH_CUDA_ARCH_LIST=$ARCH
+export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-$WORKDIR/.cache/torch_extensions_sm${ARCH//./}}
+mkdir -p "$TORCH_EXTENSIONS_DIR"
+echo "GPU compute capability: $ARCH | torch extension cache: $TORCH_EXTENSIONS_DIR"
+
 REPEATS=${REPEATS:-10}
 OUT=results/$SLURM_JOB_ID
 mkdir -p "$OUT"
