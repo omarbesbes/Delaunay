@@ -456,6 +456,25 @@ def sweep(args) -> dict:
 # ----------------------------------------------------------------------------------------
 
 
+def _log_axis(ax) -> None:
+    """Readable point counts on a log axis: 2k, 10k, 100k, 1M, and no minor labels."""
+    from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
+
+    ax.set_xscale("log")
+    ax.xaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 5.0)))
+    ax.xaxis.set_minor_formatter(NullFormatter())
+    ax.xaxis.set_major_formatter(
+        FuncFormatter(
+            lambda v, _: (
+                f"{v / 1e6:g}M"
+                if v >= 1e6
+                else (f"{v / 1e3:g}k" if v >= 1e3 else f"{v:g}")
+            )
+        )
+    )
+    ax.tick_params(labelsize=8)
+
+
 def fit_exponent(ns, ts) -> float | None:
     """Least-squares slope of log t vs log N, i.e. the alpha of t ~ N^alpha."""
     pts = [(math.log(n), math.log(t)) for n, t in zip(ns, ts) if n > 0 and t > 0]
@@ -529,7 +548,7 @@ def plot(payload: dict, path: str, min_seconds: float = 2e-3) -> list[str]:
                 va="bottom",
                 alpha=0.7,
             )
-        ax.set_xscale("log")
+        _log_axis(ax)
         ax.set_yscale("log")
         ax.set_xlabel("points")
         ax.set_title(cloud)
@@ -548,6 +567,139 @@ def plot(payload: dict, path: str, min_seconds: float = 2e-3) -> list[str]:
     return [path]
 
 
+# What each method's time is made of.  Paragram reports its three phases separately, which is more
+# informative than one GPU / CPU split; every other method reports GPU and CPU totals, and the two
+# command-line tools additionally report the file exchange (measured, excluded from the total).
+STACKS = {
+    "paragram": [
+        ("adjacency", "GPU: Voronoi adjacency", "#4477aa"),
+        ("conversion", "GPU: 4-clique conversion", "#88ccee"),
+        ("repair", "CPU: exact repair", "#cc6677"),
+    ],
+}
+DEFAULT_STACK = [("gpu", "GPU", "#4477aa"), ("cpu", "CPU", "#cc6677")]
+
+
+def plot_breakdown(payload: dict, stem: str) -> list[str]:
+    """Per method: what the time is spent on as N grows, and how the CPU share moves."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    runs = [r for r in payload["runs"] if r.get("seconds")]
+    out = []
+    for cloud in sorted({r["cloud"] for r in runs}):
+        jitters = sorted({r["jitter"] for r in runs if r["cloud"] == cloud})
+        methods = [
+            m
+            for m in ALL_METHODS
+            if any(r["method"] == m and r["cloud"] == cloud for r in runs)
+        ]
+        if not methods or not jitters:
+            continue
+        ncol = 1 + len(methods)
+        fig, axes = plt.subplots(
+            len(jitters), ncol, figsize=(3.1 * ncol, 3.4 * len(jitters)), squeeze=False
+        )
+        for row, jit in enumerate(jitters):
+            sel = [r for r in runs if r["cloud"] == cloud and r["jitter"] == jit]
+
+            # left panel: the share of the total spent on the CPU
+            ax = axes[row][0]
+            for m in methods:
+                pts = sorted(
+                    (r for r in sel if r["method"] == m and r.get("seconds")),
+                    key=lambda r: r["n"],
+                )
+                xy = [
+                    (r["n"], (r.get("cpu") or 0.0) / r["seconds"])
+                    for r in pts
+                    if r["seconds"] > 0
+                    and (r.get("cpu") is not None or r.get("gpu") is not None)
+                ]
+                if xy:
+                    ax.plot(
+                        *zip(*xy),
+                        marker="o",
+                        ms=3,
+                        lw=1.4,
+                        color=COLORS[m],
+                        label=LABELS[m],
+                    )
+            _log_axis(ax)
+            ax.set_ylim(-0.05, 1.05)
+            ax.set_ylabel("fraction of the time on the CPU")
+            ax.set_xlabel("points")
+            ax.set_title(f"CPU share   (jitter {jit:g})", fontsize=9)
+            ax.grid(True, which="both", alpha=0.25)
+            if row == 0:
+                ax.legend(fontsize=6, loc="center left")
+
+            # one stacked panel per method
+            for col, m in enumerate(methods, start=1):
+                ax = axes[row][col]
+                pts = sorted(
+                    (r for r in sel if r["method"] == m and r.get("seconds")),
+                    key=lambda r: r["n"],
+                )
+                ns = [r["n"] for r in pts]
+                stack = STACKS.get(m, DEFAULT_STACK)
+                parts = [
+                    (lab, colour, [r.get(key) or 0.0 for r in pts])
+                    for key, lab, colour in stack
+                    if any(r.get(key) for r in pts)
+                ]
+                if parts and ns:
+                    ax.stackplot(
+                        ns,
+                        *[v for _, _, v in parts],
+                        labels=[lab for lab, _, _ in parts],
+                        colors=[c for _, c, _ in parts],
+                        alpha=0.85,
+                    )
+                if ns:
+                    ax.plot(
+                        ns,
+                        [r["seconds"] for r in pts],
+                        color="k",
+                        lw=1.2,
+                        ls="--",
+                        label="total (mean)",
+                    )
+                    io = [r.get("io") or 0.0 for r in pts]
+                    if any(io):
+                        ax.plot(
+                            ns,
+                            io,
+                            color="#999999",
+                            lw=1.0,
+                            ls=":",
+                            label="excluded file I/O",
+                        )
+                _log_axis(ax)
+                ax.set_xlabel("points")
+                ax.set_title(f"{LABELS[m]}   (jitter {jit:g})", fontsize=9)
+                ax.grid(True, which="both", alpha=0.25)
+                ax.legend(fontsize=6, loc="upper left")
+        fig.suptitle(
+            f"Where the time goes: {cloud}"
+            + (
+                f"   [{payload['_env'].get('gpu')}]"
+                if payload["_env"].get("gpu")
+                else ""
+            ),
+            fontsize=11,
+        )
+        fig.tight_layout()
+        path = f"{stem}_breakdown_{cloud}.png"
+        fig.savefig(path, dpi=140)
+        plt.close(fig)
+        print(f"wrote {path}")
+        out.append(path)
+    return out
+
+
 def write_csv(payload: dict, path: str) -> None:
     import csv
 
@@ -564,6 +716,9 @@ def write_csv(payload: dict, path: str) -> None:
         "gpu",
         "cpu",
         "io",
+        "adjacency",
+        "repair",
+        "conversion",
         "tets",
         "error",
     ]
@@ -702,6 +857,7 @@ def main() -> int:
         write_csv(payload, args.csv)
     if args.plot:
         plot(payload, args.plot)
+        plot_breakdown(payload, os.path.splitext(args.plot)[0])
     return 0
 
 

@@ -115,10 +115,19 @@ CLOUD=data/voronoi_jax_068.ply REPEATS=1 sbatch run_scaling.sbatch
 python scaling_study.py --plot-only results/scaling-<jobid>/scaling.json --plot mine.png
 ```
 
-Outputs `scaling.png` (log-log, one panel per cloud, solid without jitter and dashed with it, the
-fitted exponent alpha of *t ~ N^alpha* in the legend), `scaling.csv` (for your own plots; it has the
-GPU / CPU split, so Paragram's GPU-only curve can be drawn separately from its CPU repair) and
-`scaling.json`, rewritten after every size so a job that is cut short still leaves a usable curve.
+Outputs:
+
+* `scaling.png` -- log-log, one panel per cloud, solid without jitter and dashed with it, the fitted
+  exponent alpha of *t ~ N^alpha* in the legend.
+* `scaling_breakdown_<cloud>.png` -- **where the time goes as N grows**: one row per jitter, a
+  left-hand panel with each method's CPU share, then one stacked panel per method. Paragram is
+  broken into its three phases (GPU adjacency, GPU 4-clique conversion, CPU exact repair); the
+  others into GPU and CPU totals, with the command-line tools' file exchange drawn as a dotted line
+  (measured, excluded from the total).
+* `scaling.csv` -- one row per measurement with `gpu`, `cpu`, `io`, `adjacency`, `repair`,
+  `conversion` and the tetrahedron count, for your own plots and fits.
+* `scaling.json` -- rewritten after every measurement, so a job that is cut short still leaves a
+  usable curve.
 
 Two things to know about the sizes:
 
