@@ -326,6 +326,36 @@ def repeated_timing_table(data) -> str:
     return "\n".join(rows)
 
 
+def jitter_timing_table(data, jdata) -> str:
+    """Mean time per method without and with the jitter: how much the exact degeneracies cost."""
+    methods = [
+        m
+        for m in TIMING_LABELS
+        if any(m in (r.get("timing") or {}) for r in data.values())
+        or any(m in (r.get("timing") or {}) for r in jdata.values())
+    ]
+    rows = [
+        "| dataset | " + " | ".join(TIMING_LABELS[m] for m in methods) + " |",
+        "|" + "---|" * (len(methods) + 1),
+    ]
+    for name, r in data.items():
+        if name not in jdata:
+            continue
+        cells = []
+        for m in methods:
+            a = ((r.get("timing") or {}).get(m) or {}).get("mean")
+            b = ((jdata[name].get("timing") or {}).get(m) or {}).get("mean")
+            if a is None or b is None:
+                cells.append(f({"mean": a}.get("mean")) if a is not None else "-")
+            else:
+                cells.append(
+                    f"{f(a)} -> {f(b)}"
+                    + (f" (**{a / b:.1f}x**)" if b > 0 and a / b >= 1.5 else "")
+                )
+        rows.append(f"| {name} | " + " | ".join(cells) + " |")
+    return "\n".join(rows)
+
+
 def _sides(r, data):
     sides = [("Paragram", primary(r))]
     for m, lab in methods_present(data):
@@ -723,7 +753,7 @@ def main():
             "file exchange of the command-line tools (Local DeWall parses a 100k-line text file, CGAL exchanges "
             "binary arrays), which a library integration would not pay. "
             "GPU = time spent in GPU phases as reported by the method itself (Paragram: adjacency + conversion, "
-            "synchronised; gDel3D: its init/split/flip/relocate/sort timers; Local DeWall: its phase timers); "
+            "synchronised; gDel3D: its init/split/flip/relocate/sort timers; gStar4D: its init/PBA/initstar/consistency/staroutput timers; Local DeWall: its phase timers; GeoDel and CGAL are CPU-only); "
             "CPU = host work (Paragram: exact repair of failed/hull cells; gDel3D: star splaying + copy-back; "
             "Local DeWall: file parsing and normalisation; CGAL: everything).\n"
         ),
@@ -837,6 +867,13 @@ def main():
                 f"\nParagram identical after jitter: **{sum(verdict(r).startswith('IDENTICAL') for r in jdata.values())} / "
                 f"{len(jdata)}**."
             ),
+            (
+                "\nMean seconds per method, without jitter -> with jitter.  The exact predicates of "
+                "the degenerate cloud are what the speed-ups pay for: every co-spherical group "
+                "forces the flipping / star-splaying methods into their exact-arithmetic path, and "
+                "a generic perturbation removes them.\n"
+            ),
+            jitter_timing_table(data, jdata),
         ]
 
     md.append(
@@ -850,6 +887,19 @@ def main():
         "**gDel3D** (Cao, Nanjappa, Gao, Tan; I3D 2014, pyGDel3D bindings): GPU insertion + bistellar flipping, CPU "
         "star splaying; double precision, exact predicates, Simulation of Simplicity. Dead tetrahedra of the repair "
         "step and tets incident to the point at infinity are removed before comparison.\n\n"
+        "**gStar4D** (Nanjappa, MSc thesis 2012 / Gao et al.): fully GPU star splaying, seeded by a "
+        "discrete Voronoi diagram computed with the Parallel Banding Algorithm on a `g^3` voxel grid "
+        "(`--gstar4d-grid`, default 512); float32 coordinates with Shewchuk's exact predicates on the "
+        "GPU (compiled with `-fmad=false`, without which the error-free transformations break). The "
+        "tool scales the input into its grid in float32 and Morton-sorts it, so it is compared "
+        "against a reference on that scaled set (mapped back to the original frame for the metrics), "
+        "and the difference to the reference on the original coordinates is noted. Ported to CUDA 12 "
+        "by `patch_gstar4d.py`; at a grid of 256 it loses too many points to voxel collisions on a "
+        "surface cloud and stalls, see the notes in README.md.\n\n"
+        "**GeoDel** (Geogram's `ParallelDelaunay3d`, Levy; python binding by Anttwo): CPU only, "
+        "multithreaded (given the cores of the job, the same as CGAL parallel); float64 with exact "
+        "predicates and symbolic perturbation. Takes the points as they are and returns indices into "
+        "them, so no coordinate remapping is needed.\n\n"
         "**Local DeWall** (Gao & Chen, CAD 2026): GPU Delaunay wall construction with ordered local point lists; "
         "float32 coordinates with exact predicates; the tool normalises the input to the unit cube in float32, which "
         "moves points by up to one ulp, so it is compared against a reference on that renormalised set (mapped back "
