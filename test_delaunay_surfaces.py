@@ -11,9 +11,17 @@ For every dataset the script
      (--cgal-bin / CGAL_DELAUNAY_BIN, source in cgal_delaunay.cpp).  Otherwise the sequential
      `cgal` Python bindings are used, in this interpreter or, via CGAL_PYTHON=/path/to/python,
      in another one (wheels exist for Python 3.8-3.12 only); last resort is scipy/Qhull,
-  4. optionally runs gDel3D (GPU Delaunay by flipping + star splaying, double precision with
-     exact predicates and symbolic perturbation) through the pyGDel3D bindings
-     (https://github.com/half-potato/pyGDel3D) as a second GPU method,
+  4. optionally runs the other methods on the same points:
+       * gDel3D, GPU Delaunay by flipping + CPU star splaying, double precision with exact
+         predicates and symbolic perturbation, through the pyGDel3D bindings
+         (https://github.com/half-potato/pyGDel3D),
+       * gStar4D, GPU star splaying seeded by a discrete Voronoi diagram, through its
+         command-line tool (--gstar4d-bin, https://github.com/ashwin/gStar4D, patched for
+         CUDA 12 by patch_gstar4d.py),
+       * Local DeWall, GPU Delaunay-wall construction, through its command-line tool
+         (--dewall-bin, https://github.com/WuhengGao/Local-DeWall),
+       * GeoDel, Geogram's ParallelDelaunay3d on the CPU (--geodel,
+         https://github.com/Anttwo/GeoDel),
   5. reports correctness metrics (set difference of tetrahedra vs the reference, empty-
      circumsphere violations, total volume vs convex-hull volume, face manifoldness, Euler
      characteristic) and quality metrics (volume statistics, radius ratio, dihedral angles,
@@ -84,7 +92,9 @@ def summarize_runs(runs: list[dict]) -> dict:
 TIMING_LABELS = {
     "paragram": "paragram",
     "gdel3d": "gdel3d",
+    "gstar4d": "gstar4d",
     "dewall": "dewall",
+    "geodel": "geodel",
     "cgal_parallel": "cgal parallel",
     "cgal_sequential": "cgal sequential",
 }
@@ -99,7 +109,15 @@ def format_timing_table(timing: dict, indent: str = "   ") -> str:
             f"{'CPU':>9s} {'excl.I/O':>9s}  breakdown"
         ),
     ]
-    for label in ("paragram", "gdel3d", "dewall", "cgal_parallel", "cgal_sequential"):
+    for label in (
+        "paragram",
+        "gdel3d",
+        "gstar4d",
+        "dewall",
+        "geodel",
+        "cgal_parallel",
+        "cgal_sequential",
+    ):
         t = timing.get(label)
         if not t:
             continue
@@ -891,12 +909,274 @@ def run_dewall(
     return tets, info.get("gpu_seconds", wall), info
 
 
+def geodel_available() -> bool:
+    try:
+        import geodel  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def run_geodel(
+    points: np.ndarray, nb_threads: int = 0, parallel: bool = True
+) -> tuple[np.ndarray, float, dict]:
+    """Delaunay tetrahedra with GeoDel (https://github.com/Anttwo/GeoDel), a Python binding of
+    Geogram's `ParallelDelaunay3d` (Levy).  CPU only, multithreaded through OpenMP.
+
+    `geodel.delaunay3d` takes the (N, 3) float64 points as they are (no rescaling, no rounding)
+    and returns (M, 4) uint32 indices into them, so no coordinate remapping is needed and the
+    method is compared against the same reference as everybody else.  `nb_threads=0` means "all
+    cores Geogram can see"; the benchmark passes the cores the job actually owns."""
+    import geodel
+
+    pts = np.ascontiguousarray(points, dtype=np.float64)
+    t0 = time.perf_counter()
+    cells = geodel.delaunay3d(pts, parallel=parallel, nb_threads=nb_threads)
+    seconds = time.perf_counter() - t0
+    raw = np.asarray(cells, dtype=np.int64).reshape(-1, 4)
+    info = {
+        "raw_tets": len(raw),
+        "parallel": parallel,
+        "threads_requested": nb_threads or "all",
+        "max_threads": int(
+            geodel.max_threads() if callable(geodel.max_threads) else geodel.max_threads
+        ),
+        "version": geodel.__version__,
+        # Geogram runs entirely on the CPU: the whole measured time is CPU work.
+        "gpu_seconds": 0.0,
+        "cpu_seconds": seconds,
+        "phases_seconds": {},
+    }
+    keep = ((raw >= 0) & (raw < len(pts))).all(
+        1
+    )  # NO_INDEX is 0xFFFFFFFF, i.e. -1 as int64
+    info["infinite_tets"] = int((~keep).sum())
+    tets = np.unique(np.sort(raw[keep], axis=1), axis=0)
+    info["duplicate_tets"] = int(keep.sum() - len(tets))
+    return tets, seconds, info
+
+
+def _gstar4d_input_set(
+    points: np.ndarray, grid_size: int
+) -> tuple[np.ndarray, np.ndarray, dict]:
+    """Replicate gStar4D's `Application::readPoints()` in float32.
+
+    The tool (a) drops duplicate points, (b) maps every coordinate with ONE global affine map
+    into [1, gridSize - 2] -- `(p - min) * (gridSize - 3) / (max - min) + 1`, where min and max
+    are scalars over all coordinates, seeded with +/-999 -- and (c) drops duplicates again.  The
+    map is a uniform similarity, so it does not change which tetrahedra are Delaunay; the float32
+    rounding does, by up to one ulp.  Returns the scaled points, the index of each of them in the
+    original array, and the parameters needed to map them back."""
+    p32 = np.ascontiguousarray(points, dtype=np.float32)
+    _, first = np.unique(
+        p32, axis=0, return_index=True
+    )  # std::set<Point3>: exact triples
+    kept = np.sort(first)  # ... but insertion order is kept in _pointVec
+    uniq = p32[kept]
+    lo = min(np.float32(999.0), p32.min())  # minVal starts at 999.0f, maxVal at -999.0f
+    hi = max(np.float32(-999.0), p32.max())
+    rng = np.float32(hi - lo)
+    g3 = np.float32(np.float32(grid_size) - np.float32(3.0))
+    scaled = ((g3 * (uniq - lo)) / rng) + np.float32(
+        1.0
+    )  # float32, in the tool's order
+    _, first2 = np.unique(scaled, axis=0, return_index=True)
+    kept2 = np.sort(first2)
+    meta = {
+        "dropped_duplicate_points": int(len(p32) - len(uniq)),
+        "dropped_after_scaling": int(len(uniq) - len(kept2)),
+        "min_val": float(lo),
+        "range": float(rng),
+        "grid_size": grid_size,
+    }
+    return scaled[kept2], kept[kept2], meta
+
+
+def _read_gstar4d_ply(path: str) -> tuple[np.ndarray, np.ndarray]:
+    """ASCII PLY written by the patched gStar4D: vertex block (scaled, Morton-sorted points at 9
+    significant digits) followed by one "4 v0 v1 v2 v3" line per tetrahedron."""
+    with open(path) as f:
+        nv = nf = None
+        while True:
+            line = f.readline()
+            if not line:
+                raise RuntimeError(f"{path}: PLY header not terminated")
+            tok = line.split()
+            if tok[:2] == ["element", "vertex"]:
+                nv = int(tok[2])
+            elif tok[:2] == ["element", "face"]:
+                nf = int(tok[2])
+            elif tok and tok[0] == "end_header":
+                break
+        if nv is None or nf is None:
+            raise RuntimeError(f"{path}: PLY header without vertex/face counts")
+        verts = (
+            np.loadtxt(f, dtype=np.float64, max_rows=nv).reshape(nv, 3)
+            if nv
+            else np.zeros((0, 3))
+        )
+        if nf == 0:
+            return verts, np.zeros((0, 4), dtype=np.int64)
+        faces = np.loadtxt(f, dtype=np.int64, max_rows=nf).reshape(nf, -1)
+    if faces.shape[1] != 5 or not (faces[:, 0] == 4).all():
+        raise RuntimeError(
+            f"{path}: expected one 4-index face per tetrahedron; is gStar4D patched "
+            "with patch_gstar4d.py? (upstream splits each tetrahedron into 3 triangles)"
+        )
+    return verts, faces[:, 1:]
+
+
+def run_gstar4d(
+    points: np.ndarray,
+    binary: str,
+    grid_size: int = 256,
+    facet_max: int | None = None,
+    check: bool = False,
+) -> tuple[np.ndarray, float, dict]:
+    """gStar4D (Nanjappa 2013, https://github.com/ashwin/gStar4D) through its command-line tool,
+    built from source with patch_gstar4d.py.  GPU only: a discrete Voronoi diagram (PBA) seeds one
+    star per point, the stars are made consistent, and the tetrahedra are read off the stars.
+
+    The tool reads whitespace-separated coordinates as float32, drops duplicates, scales them into
+    its grid and Morton-sorts them, so the tetrahedron indices refer to a *permuted, rescaled*
+    point set.  The permutation is undone with a KD-tree match against the same set reconstructed
+    in float32 here, and the rescaling is undone exactly in float64; the caller then compares
+    against a reference computed on those points (as it does for Local DeWall)."""
+    import re
+    import tempfile
+
+    binary = os.path.abspath(
+        binary
+    )  # the tool runs with cwd set to the temporary directory
+    p32 = np.ascontiguousarray(points, dtype=np.float32)
+    scaled, orig_of_scaled, meta = _gstar4d_input_set(p32, grid_size)
+    with tempfile.TemporaryDirectory() as d:
+        pin, pout = os.path.join(d, "points.txt"), os.path.join(d, "out.ply")
+        with open(pin, "w") as f:
+            np.savetxt(
+                f, p32, fmt="%.9g"
+            )  # 9 significant digits round-trip float32 exactly
+        cmd = [binary, "-inFile", pin, "-outFile", pout, "-g", str(grid_size)]
+        if facet_max:
+            cmd += ["-f", str(facet_max)]
+        if check:
+            cmd += ["-check"]
+        t0 = time.perf_counter()
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=d, check=False)
+        wall = time.perf_counter() - t0
+        if r.returncode != 0 or not os.path.exists(pout):
+            raise RuntimeError(
+                f"gStar4D exit code {r.returncode}: {(r.stdout + r.stderr)[-1500:]}"
+            )
+        verts, faces = _read_gstar4d_ply(pout)
+    out = r.stdout
+    info = {"wall_seconds": wall, "raw_tets": len(faces), **meta}
+    phases = {}
+    for key, label in (
+        ("Init", "init"),
+        ("PBA", "pba"),
+        ("InitStar", "initstar"),
+        ("Consistency", "consistency"),
+        ("StarOutput", "staroutput"),
+        ("Total Time", "total"),
+    ):
+        m = re.search(rf"^\s*{re.escape(key)}:\s*([0-9.eE+-]+)\s*$", out, re.MULTILINE)
+        if m:
+            phases[label] = float(m.group(1)) / 1000.0  # the tool prints milliseconds
+    info["self_reported_total_seconds"] = phases.get("total")
+    # Every phase of gStar4D runs on the GPU (its own timers wrap cudaDeviceSynchronize).  Reading
+    # the input file, writing the PLY and spawning the process are outside those timers and are an
+    # artefact of the command-line interface, so they are accounted separately as io_seconds.
+    info["gpu_seconds"] = phases.get("total", wall)
+    info["cpu_seconds"] = 0.0
+    info["io_seconds"] = max(0.0, wall - info["gpu_seconds"])
+    info["phases_seconds"] = {k: v for k, v in phases.items() if k != "total"}
+    for pat, key in (
+        (r"(\d+)\s+duplicate points in input file", "tool_duplicate_points"),
+        (r"Tetra in-sphere is correct", "self_check_insphere"),
+        (r"In-sphere check failed", "self_check_insphere_failed"),
+    ):
+        m = re.search(pat, out)
+        if m:
+            info[key] = int(m.group(1)) if m.groups() else True
+    if len(verts) != len(scaled):
+        raise RuntimeError(
+            f"gStar4D triangulated {len(verts)} points but this benchmark reconstructed "
+            f"{len(scaled)} (duplicates dropped: tool {info.get('tool_duplicate_points', 0)}, "
+            f"here {meta['dropped_duplicate_points']} + {meta['dropped_after_scaling']})"
+        )
+    finite = ((faces >= 0) & (faces < len(verts))).all(1)
+    info["infinite_tets"] = int((~finite).sum())
+    # The PLY holds the scaled float32 coordinates at 9 significant digits, which round-trip
+    # float32 exactly, so rounding the parsed values back to float32 makes the match exact: any
+    # non-zero distance below means the vertex block is not the point set reconstructed here.
+    dist, scaled_of_ply = cKDTree(scaled.astype(np.float64)).query(
+        verts.astype(np.float32).astype(np.float64)
+    )
+    info["max_match_dist"] = float(dist.max()) if len(dist) else 0.0
+    info["unmatched_points"] = int(len(verts) - len(np.unique(scaled_of_ply)))
+    tets = orig_of_scaled[scaled_of_ply[faces[finite]]]
+    tets = np.unique(np.sort(tets, axis=1), axis=0)
+    info["duplicate_tets"] = int(finite.sum() - len(tets))
+    # Hand back the point set the tool actually triangulated: the float32 scaled points mapped
+    # back into the original frame with the exact inverse affine map in float64 (a similarity, so
+    # it preserves Delaunay-ness), so the reference and the volumes are in the input's units.
+    back = np.empty((len(points), 3), dtype=np.float64)
+    back[:] = np.asarray(
+        points, dtype=np.float64
+    )  # points the tool dropped keep their input value
+    back[orig_of_scaled] = (scaled.astype(np.float64) - 1.0) * (
+        meta["range"] / (grid_size - 3.0)
+    ) + meta["min_val"]
+    if meta["dropped_duplicate_points"] or meta["dropped_after_scaling"]:
+        info["points_dropped_note"] = (
+            "duplicate points were dropped by the tool; they keep their input coordinates in the "
+            "point set handed to the reference, so the reference may pick a different duplicate"
+        )
+    info["_points"] = back
+    info["reference_on"] = (
+        "the tool's float32 grid-scaled point set (mapped back to the original frame)"
+    )
+    return tets, info["gpu_seconds"], info
+
+
 def _fmt_method_info(label: str, info: dict) -> str:
     if label == "gdel3d":
         return (
             f"gdel3d: {info['raw_tets']} raw tets, {info['infinite_tets']} infinite, "
             f"{info.get('dead_tets', '?')} dead, {info['duplicate_tets']} duplicate, "
             f"dead filter={info['dead_filter']}, self-check={info['self_check']}"
+        )
+    if label == "gstar4d":
+        return (
+            f"gstar4d: {info['raw_tets']} raw tets, {info['infinite_tets']} infinite, "
+            f"{info['duplicate_tets']} duplicate, gpu {info['gpu_seconds']:.3f}s "
+            f"(wall {info['wall_seconds']:.2f}s incl. file I/O), grid {info['grid_size']}^3, "
+            f"duplicate points dropped {info['dropped_duplicate_points']}"
+            f"+{info['dropped_after_scaling']}, index match max dist {info['max_match_dist']:.1e}, "
+            f"unmatched {info['unmatched_points']}"
+            + (
+                ", in-sphere self-check: "
+                + (
+                    "ok"
+                    if info.get("self_check_insphere")
+                    else "FAILED"
+                    if info.get("self_check_insphere_failed")
+                    else "not run"
+                )
+                if (
+                    "self_check_insphere" in info
+                    or "self_check_insphere_failed" in info
+                )
+                else ""
+            )
+        )
+    if label == "geodel":
+        return (
+            f"geodel: {info['raw_tets']} raw tets, {info['infinite_tets']} infinite, "
+            f"{info['duplicate_tets']} duplicate, v{info['version']}, "
+            f"parallel={info['parallel']}, threads={info['threads_requested']} "
+            f"(machine max {info['max_threads']})"
         )
     if label == "dewall":
         st = ", ".join(f"{k}={v}" for k, v in info.get("status", {}).items())
@@ -1392,7 +1672,9 @@ def compare_sets(tets_a: np.ndarray, tets_b: np.ndarray, n: int) -> dict:
 METHOD_LABELS = {
     "paragram": "Paragram + conversion",
     "gdel3d": "gDel3D",
+    "gstar4d": "gStar4D",
     "dewall": "Local DeWall",
+    "geodel": "GeoDel (Geogram)",
 }
 
 
@@ -1557,6 +1839,35 @@ def main():
         "--verbose", action="store_true", help="timestamped progress lines on stderr"
     )
     ap.add_argument(
+        "--geodel",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="also run GeoDel (Geogram's parallel CPU Delaunay; pip install git+https://github.com/Anttwo/GeoDel)",
+    )
+    ap.add_argument(
+        "--geodel-threads",
+        type=int,
+        default=0,
+        help="threads for GeoDel (0 = SLURM_CPUS_PER_TASK / CGAL_THREADS if set, else all cores)",
+    )
+    ap.add_argument(
+        "--gstar4d-bin",
+        default=os.environ.get("GSTAR4D_BIN"),
+        help="compiled gStar4D tool (see patch_gstar4d.py); also runs gStar4D (env GSTAR4D_BIN)",
+    )
+    ap.add_argument(
+        "--gstar4d-grid",
+        type=int,
+        default=256,
+        help="gStar4D PBA grid resolution (-g); the point coordinates are scaled into it (default 256)",
+    )
+    ap.add_argument(
+        "--gstar4d-facet-max",
+        type=int,
+        default=0,
+        help="gStar4D working-set cap (-f); 0 keeps its default of 12000000, which needs several GB of VRAM",
+    )
+    ap.add_argument(
         "--dewall-bin",
         default=os.environ.get("LOCAL_DEWALL_BIN"),
         help="compiled Local-DeWall tool (see patch_dewall.py); also runs Local DeWall (env LOCAL_DEWALL_BIN)",
@@ -1577,6 +1888,18 @@ def main():
     if dewall_bin and not os.path.exists(dewall_bin):
         print(f"Local DeWall binary not found: {dewall_bin}; skipping it")
         dewall_bin = None
+    use_geodel = args.geodel == "on" or (args.geodel == "auto" and geodel_available())
+    if args.geodel != "off" and not use_geodel:
+        print(
+            "GeoDel not available (pip install git+https://github.com/Anttwo/GeoDel@v0.1.0); skipping it"
+        )
+    geodel_threads = args.geodel_threads or int(
+        os.environ.get("SLURM_CPUS_PER_TASK") or os.environ.get("CGAL_THREADS") or 0
+    )
+    gstar4d_bin = args.gstar4d_bin
+    if gstar4d_bin and not os.path.exists(gstar4d_bin):
+        print(f"gStar4D binary not found: {gstar4d_bin}; skipping it")
+        gstar4d_bin = None
 
     device = torch.device(args.device)
     rng = np.random.default_rng(args.seed + 1)
@@ -1595,7 +1918,12 @@ def main():
         "paragram_max_verts": os.environ.get("PARAGRAM_MAX_VERTS"),
         "methods": ["paragram"]
         + (["gdel3d"] if use_gdel3d else [])
-        + (["dewall"] if dewall_bin else []),
+        + (["gstar4d"] if gstar4d_bin else [])
+        + (["dewall"] if dewall_bin else [])
+        + (["geodel"] if use_geodel else []),
+        "geodel_threads": geodel_threads if use_geodel else None,
+        "gstar4d_grid": args.gstar4d_grid if gstar4d_bin else None,
+        "gstar4d_facet_max": (args.gstar4d_facet_max or None) if gstar4d_bin else None,
         "unit_cube": args.unit_cube,
         "repeats": args.repeats,
         "warmup": args.warmup,
@@ -1845,6 +2173,22 @@ def main():
         runners = []
         if use_gdel3d:
             runners.append(("gdel3d", lambda p=pts: run_gdel3d(p)))
+        if gstar4d_bin:
+            runners.append(
+                (
+                    "gstar4d",
+                    lambda p=pts: run_gstar4d(
+                        p,
+                        gstar4d_bin,
+                        grid_size=args.gstar4d_grid,
+                        facet_max=args.gstar4d_facet_max or None,
+                    ),
+                )
+            )
+        if use_geodel:
+            runners.append(
+                ("geodel", lambda p=pts: run_geodel(p, nb_threads=geodel_threads))
+            )
         if dewall_bin:
             in_unit = bool(
                 pts.min() >= 0.0 and pts.max() < 1.0
@@ -1913,6 +2257,28 @@ def main():
                             else ""
                         )
                     )
+                if label == "gstar4d":
+                    ph = m_info.get("phases_seconds") or {}
+                    timing[label]["breakdown"] = (
+                        "GPU: "
+                        + " ".join(
+                            f"{k} {ph[k]:.3f}"
+                            for k in (
+                                "init",
+                                "pba",
+                                "initstar",
+                                "consistency",
+                                "staroutput",
+                            )
+                            if k in ph
+                        )
+                        + " | CPU: - | excl.I/O = text write, PLY parse and process spawn (its CLI)"
+                    )
+                if label == "geodel":
+                    timing[label]["breakdown"] = (
+                        f"CPU: all of it, {m_info['threads_requested']} thread(s) of "
+                        f"{m_info['max_threads']} (Geogram ParallelDelaunay3d) | GPU: -"
+                    )
                 if label == "dewall":
                     ph = m_info.get("phases_seconds") or {}
                     timing[label]["breakdown"] = (
@@ -1941,7 +2307,11 @@ def main():
         summary.append((name, entry))
 
     # ---- summary table ----------------------------------------------------------------------
-    methods = [m for m in ("gdel3d", "dewall") if any(m in e for _, e in summary)]
+    methods = [
+        m
+        for m in ("gdel3d", "gstar4d", "dewall", "geodel")
+        if any(m in e for _, e in summary)
+    ]
     head = (
         f"{'dataset':18s} {'N':>7s} {'tets ref':>10s} {'tets paragram':>13s} {'paragram-only':>13s} {'ref-only':>8s} "
         f"{'viol':>5s} {'volerr':>9s} {'failed cells':>12s}"
@@ -1973,7 +2343,15 @@ def main():
     # ---- timing summary: datasets x methods (mean seconds over the repeated runs) ---------
     labels = [
         m
-        for m in ("paragram", "gdel3d", "dewall", "cgal_parallel", "cgal_sequential")
+        for m in (
+            "paragram",
+            "gdel3d",
+            "gstar4d",
+            "dewall",
+            "geodel",
+            "cgal_parallel",
+            "cgal_sequential",
+        )
         if any(m in (e.get("timing") or {}) for _, e in summary)
     ]
     if labels:

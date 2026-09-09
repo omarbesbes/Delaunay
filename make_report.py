@@ -22,11 +22,18 @@ matplotlib.use("Agg")
 
 DEGENERATE_HINTS = ("not unique", "co-circular", "co-spherical")
 PRIMARY = "paragram"
-EXTRA_METHODS = [("gdel3d", "gDel3D"), ("dewall", "Local DeWall")]
+EXTRA_METHODS = [
+    ("gdel3d", "gDel3D"),
+    ("gstar4d", "gStar4D"),
+    ("dewall", "Local DeWall"),
+    ("geodel", "GeoDel"),
+]
 COLORS = {
     "paragram": "#4477aa",
     "gdel3d": "#228833",
+    "gstar4d": "#ccbb44",
     "dewall": "#aa3377",
+    "geodel": "#66ccee",
     "ref": "#ee6677",
 }
 
@@ -232,7 +239,9 @@ def timing_table(data) -> str:
 TIMING_LABELS = {
     "paragram": "Paragram + conversion",
     "gdel3d": "gDel3D",
+    "gstar4d": "gStar4D",
     "dewall": "Local DeWall",
+    "geodel": "GeoDel (Geogram)",
     "cgal_parallel": "CGAL parallel (TBB)",
     "cgal_sequential": "CGAL sequential",
 }
@@ -285,6 +294,23 @@ def repeated_timing_table(data) -> str:
                     extra.append(
                         "(GPU: init/split/flip/relocate/sort; CPU: splaying + device->host copy)"
                     )
+            elif m == "gstar4d":
+                info = r.get("gstar4d_info") or {}
+                ph = info.get("phases_seconds") or {}
+                extra = [f"{k} {v:.3f}" for k, v in ph.items()] + [
+                    (
+                        f"(all phases GPU; grid {info.get('grid_size', '?')}^3; "
+                        "excluded I/O = text write, PLY parse, process spawn)"
+                    )
+                ]
+            elif m == "geodel":
+                info = r.get("geodel_info") or {}
+                extra = [
+                    (
+                        f"CPU only, {info.get('threads_requested', '?')} thread(s) of "
+                        f"{info.get('max_threads', '?')} (Geogram ParallelDelaunay3d)"
+                    )
+                ]
             elif m == "dewall":
                 ph = (r.get("dewall_info") or {}).get("phases_seconds") or {}
                 extra = [f"{k} {v:.3f}" for k, v in ph.items()] + [
@@ -639,11 +665,15 @@ def main():
             for r in data.values()
             if m in r
         )
+        why = (
+            f"{flats} zero-volume tetrahedra in total, produced by symbolic perturbation on "
+            "co-planar points, plus co-spherical tie-breaks"
+            if flats
+            else "co-spherical tie-breaks only, no zero-volume tetrahedra"
+        )
         md.append(
             f"* **{lab}**: **{n_id} / {len(data)}** identical to {ref}; {n_ok} valid but differing "
-            f"({flats} zero-volume tetrahedra in total, produced by symbolic perturbation on co-planar points, "
-            f"plus co-spherical tie-breaks); {n_mis} mismatches"
-            + (f"; {n_fail} crashed." if n_fail else ".")
+            f"({why}); {n_mis} mismatches" + (f"; {n_fail} crashed." if n_fail else ".")
         )
     common = [r for r in data.values() if all(m in r for m, _ in ex)]
     if common:
@@ -654,12 +684,18 @@ def main():
             f"{lab} {sum(r[m]['seconds'] for r in common):.2f} s" for m, lab in ex
         ]
         parts.append(f"{ref} {sum(r['ref']['seconds'] for r in common):.2f} s")
+        notes = {
+            "gdel3d": "gDel3D's includes the host->GPU transfer and its CPU star-splaying",
+            "gstar4d": "gStar4D's is the tool's own GPU total (file I/O excluded)",
+            "dewall": "Local DeWall's is the tool's own GPU total (file I/O excluded)",
+            "geodel": "GeoDel's is CPU-only, multithreaded",
+        }
         md.append(
             f"* Wall time over the {len(common)} datasets all methods ran on: "
             + ", ".join(parts)
-            + ". Paragram's time includes the CPU repair; gDel3D's includes host→GPU transfer and its CPU star-splaying; "
-            "Local DeWall's is the tool's own GPU total (file I/O excluded); the reference is CGAL's insertion + cell "
-            "extraction."
+            + ". Paragram's time includes the CPU repair; "
+            + "; ".join(notes[m] for m, _ in ex if m in notes)
+            + "; the reference is CGAL's insertion + cell extraction."
         )
     md += [
         (
@@ -734,6 +770,25 @@ def main():
                 extra = ""
                 if m == "gdel3d":
                     extra = f", self-check={info.get('self_check')}, dead tets removed={info.get('dead_tets', 'n/a')}"
+                if m == "gstar4d":
+                    extra = (
+                        f", gpu {info.get('gpu_seconds', float('nan')):.3f}s, "
+                        f"grid {info.get('grid_size', '?')}^3, duplicate points dropped "
+                        f"{info.get('dropped_duplicate_points', 0)}"
+                        f"+{info.get('dropped_after_scaling', 0)}"
+                    )
+                    co = info.get("compare_original_coordinates")
+                    if co:
+                        extra += (
+                            "; compared on its float32 grid-scaled point set (reference there: "
+                            f"{info.get('reference_tets_on_own_coordinates')} tets); vs the reference on the "
+                            f"original coordinates it differs by {co['method_only']} / {co['ref_only']} tets"
+                        )
+                if m == "geodel":
+                    extra = (
+                        f", {info.get('threads_requested', '?')} thread(s) of "
+                        f"{info.get('max_threads', '?')}, all CPU"
+                    )
                 if m == "dewall":
                     st = ", ".join(
                         f"{k}={v}" for k, v in (info.get("status") or {}).items()

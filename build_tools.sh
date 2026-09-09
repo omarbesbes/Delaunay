@@ -1,6 +1,7 @@
 #!/bin/bash
-# Build the two standalone tools if they are missing (idempotent).  Requires an activated
-# environment (conda env with nvcc, CGAL headers, TBB).  Usage: bash build_tools.sh [--force]
+# Build the standalone tools if they are missing (idempotent): the parallel CGAL tool, Local DeWall
+# and gStar4D.  Requires an activated environment (conda env with nvcc, CGAL headers, TBB).
+# Usage: bash build_tools.sh [--force]
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p bin third_party
@@ -32,7 +33,22 @@ else
   echo "-- bin/dewall present"
 fi
 
+if [ "$FORCE" = "--force" ] || [ ! -x bin/gstar4d ]; then
+  echo "-- building bin/gstar4d (gStar4D, archs $ARCHS)"
+  [ -d third_party/gStar4D ] || git clone -q https://github.com/ashwin/gStar4D.git third_party/gStar4D
+  # ports the PBA stage off the texture-reference API (removed in CUDA 12) and makes the PLY writer
+  # emit one 4-index tetrahedron per line at 9 significant digits
+  python patch_gstar4d.py third_party/gStar4D
+  GS_ARCHS=$(echo "$ARCHS" | tr ';' ',' | tr -d '.')
+  # patch_gstar4d.py --build prints the two commands (predicates.c as C, then everything with nvcc)
+  python patch_gstar4d.py third_party/gStar4D --build --arch="$GS_ARCHS" --out=bin/gstar4d \
+    --cc="${CC:-cc}" | grep -E '^[a-z_0-9-]*(cc|gcc|nvcc) ' > bin/_gstar4d_build.sh
+  bash -x bin/_gstar4d_build.sh
+else
+  echo "-- bin/gstar4d present"
+fi
+
 echo "-- tools:"
-for b in bin/cgal_delaunay bin/dewall; do
+for b in bin/cgal_delaunay bin/dewall bin/gstar4d; do
   printf '   %-20s %s\n' "$b" "$([ -x "$b" ] && echo OK || echo MISSING)"
 done

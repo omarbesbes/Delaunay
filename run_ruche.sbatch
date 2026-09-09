@@ -11,6 +11,8 @@
 # Usage:  sbatch run_ruche.sbatch                 (your two point clouds, 10 repeats)
 #         FULL=1 sbatch run_ruche.sbatch          (also analytic surfaces + meshes, 20k samples each)
 #         REPEATS=5 sbatch run_ruche.sbatch
+# Methods: Paragram + conversion (GPU), gDel3D (GPU), gStar4D (GPU), Local DeWall (GPU),
+#          GeoDel / Geogram (CPU-parallel), CGAL parallel (TBB) and CGAL sequential.
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 set +u; module purge; module load anaconda3/2023.09-0/none-none; set -u
@@ -139,23 +141,30 @@ import os
 
 print("   paragram :", "importable" if importlib.util.find_spec("paragram") else "MISSING")
 print("   gdel3d   :", "importable" if importlib.util.find_spec("gdel3d") else "MISSING (pyGDel3D not installed)")
-for tool, what in (("bin/cgal_delaunay", "CGAL parallel/sequential"), ("bin/dewall", "Local DeWall")):
+print("   geodel   :", "importable" if importlib.util.find_spec("geodel") else "MISSING (GeoDel not installed)")
+for tool, what in (
+    ("bin/cgal_delaunay", "CGAL parallel/sequential"),
+    ("bin/dewall", "Local DeWall"),
+    ("bin/gstar4d", "gStar4D"),
+):
     print(f"   {tool:17s}:", f"OK ({what})" if os.access(tool, os.X_OK) else f"MISSING -> {what} will be skipped")
 PY
 
 DATASETS="--no-analytic --models"
 [ "${FULL:-0}" = "1" ] && DATASETS="--n 20000"
 COMMON="--unit-cube --repeats $REPEATS --slow-repeats 2 --slow-threshold 100 --verbose \
-  --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --ply data/*.ply $DATASETS"
+  --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
+  --geodel auto --geodel-threads $SLURM_CPUS_PER_TASK --ply data/*.ply $DATASETS"
 
 echo "== warm-up: JIT-compile Paragram's CUDA extension"
 python -c "import torch, paragram; d = paragram.voronoi_diagram(torch.rand(10000, 3, device='cuda'), bbox_pad=10.0); print('paragram ready, status ok:', int((d.status == 0).sum()), '/ 10000')"
 
-echo "== corrected Paragram (pad 10x, CPU repair) + gDel3D + Local DeWall + CGAL parallel/sequential"
+echo "== corrected Paragram (pad 10x, CPU repair) + gDel3D + gStar4D + Local DeWall + GeoDel + CGAL parallel/sequential"
 python test_delaunay_surfaces.py $COMMON --paragram-bbox-pad 10 --repair on --json "$OUT/results.json" 2>&1 | tee "$OUT/run.log"
 
-echo "== baseline Paragram (upstream box, no repair), 3 repeats"
-python test_delaunay_surfaces.py $COMMON --repeats 3 --paragram-bbox-pad -1 --repair off --gdel3d off --json "$OUT/results_baseline.json" 2>&1 | tee "$OUT/run_baseline.log"
+echo "== baseline Paragram (upstream box, no repair), 3 repeats -- Paragram only, the others are unaffected"
+python test_delaunay_surfaces.py $COMMON --repeats 3 --paragram-bbox-pad -1 --repair off \
+  --gdel3d off --geodel off --gstar4d-bin "" --dewall-bin "" --json "$OUT/results_baseline.json" 2>&1 | tee "$OUT/run_baseline.log"
 
 echo "== jittered (1e-6) run, 3 repeats"
 python test_delaunay_surfaces.py $COMMON --repeats 3 --jitter 1e-6 --paragram-bbox-pad 10 --repair on --json "$OUT/results_jitter.json" 2>&1 | tee "$OUT/run_jitter.log"

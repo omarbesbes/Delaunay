@@ -3,3 +3,5 @@ scipy
 matplotlib
 certifi
 cgal          # official CGAL Python bindings (wheels for Python 3.8-3.12) - fallback reference only
+# GeoDel (Geogram ParallelDelaunay3d, CPU-parallel) - compiled from source, see setup_ruche.sh:
+#   pip install "geodel @ git+https://github.com/Anttwo/GeoDel@v0.1.0"

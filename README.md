@@ -7,7 +7,9 @@ result against an exact CGAL reference, tetrahedron for tetrahedron:
 |---|---|---|
 | **Paragram + conversion** | Paragram (GPU Voronoi adjacency, float32) → exact CPU repair of failed / hull cells (`paragram_repair.py`) → 4-clique + insphere conversion to tetrahedra (`voronoi_to_delaunay.py`) | float32 GPU, float64 conversion |
 | **gDel3D** | GPU insertion + flipping, CPU star splaying ([pyGDel3D](https://github.com/half-potato/pyGDel3D), patched) | float64, exact predicates |
+| **gStar4D** | GPU star splaying seeded by a discrete Voronoi diagram (PBA) ([gStar4D](https://github.com/ashwin/gStar4D), patched for CUDA 12) | float32 points, exact predicates |
 | **Local DeWall** | GPU Delaunay-wall construction ([Local-DeWall](https://github.com/WuhengGao/Local-DeWall), patched for Linux) | float32, exact predicates |
+| **GeoDel** | Geogram's `ParallelDelaunay3d` through a Python binding ([GeoDel](https://github.com/Anttwo/GeoDel)), CPU-parallel (OpenMP) | float64, exact predicates |
 | **CGAL parallel** | `Delaunay_triangulation_3` with `Parallel_tag` + TBB (`cgal_delaunay.cpp`), the reference | exact |
 | **CGAL sequential** | same tool with `CGAL_THREADS=1` | exact |
 
@@ -20,7 +22,9 @@ GPU / CPU split. `make_report.py` turns the JSON into a Markdown report with cha
 Datasets: the two point clouds in `data/` (≈100k points each), and optionally analytic surfaces (cube,
 hollow cube, spheres, tori, Klein bottle, Möbius strip, trefoil) and classic meshes (bunny, spot, teapot,
 cow, Suzanne, armadillo). With `--unit-cube` every dataset is normalised into the unit cube in float32 first,
-so all methods triangulate *exactly* the same points (Local DeWall would otherwise renormalise internally).
+so all methods triangulate *exactly* the same points (Local DeWall and gStar4D would otherwise rescale
+internally). Those two tools do rescale and permute their input regardless, so each is compared against a
+reference computed on the point set it actually triangulated, and the report says so.
 
 ## Running on Ruche (Mésocentre, SLURM)
 
@@ -37,8 +41,9 @@ torch cu128, CGAL headers + TBB), so nothing depends on the cluster's module ver
    bash setup_ruche.sh
    ```
    It creates `$WORKDIR/envs/delaunay`, installs the Python packages, builds `bin/cgal_delaunay`
-   (parallel CGAL), installs the patched Paragram and pyGDel3D, builds `bin/dewall` (Local DeWall) for
-   V100 and A100 (`TORCH_CUDA_ARCH_LIST="7.0;8.0"`), and pre-downloads the meshes. Each step prints a
+   (parallel CGAL), installs the patched Paragram, pyGDel3D and GeoDel, builds `bin/dewall` (Local DeWall)
+   and `bin/gstar4d` (gStar4D) for V100 and A100 (`TORCH_CUDA_ARCH_LIST="7.0;8.0"`), and pre-downloads the
+   meshes. Each step prints a
    check line; if one fails, the message says which tool is missing and the benchmark still runs without it.
 3. Submit the benchmark. **Use the A100 partition** (`gpua100`, the default in the script): the
    `cu128` torch wheels contain no Volta (sm_70) kernels, so Paragram and gDel3D cannot run on the
@@ -47,7 +52,8 @@ torch cu128, CGAL headers + TBB), so nothing depends on the cluster's module ver
    ```bash
    TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 bash setup_ruche.sh
    ```
-   (Local DeWall and CGAL are standalone binaries and run on any of the partitions.)
+   (Local DeWall, gStar4D and CGAL are standalone binaries, and GeoDel is CPU-only, so those four run on
+   any of the partitions.)
    ```bash
    sbatch run_ruche.sbatch                 # the two point clouds, 10 timed repeats per method
    FULL=1 sbatch run_ruche.sbatch          # + analytic surfaces and meshes (20k samples each)
@@ -55,8 +61,8 @@ torch cu128, CGAL headers + TBB), so nothing depends on the cluster's module ver
    squeue -u $USER                         # job state
    tail -f results/delaunay-bench.o<jobid> # live progress ([HH:MM:SS] lines: dataset, method, run i/N)
    ```
-   The job runs three passes: corrected Paragram (10x clipping pad, CPU repair) with gDel3D, Local DeWall
-   and CGAL; the upstream Paragram baseline (legacy clipping box, no repair; 3 repeats); and a jittered
+   The job runs three passes: corrected Paragram (10x clipping pad, CPU repair) with gDel3D, gStar4D,
+   Local DeWall, GeoDel and CGAL; the upstream Paragram baseline (legacy clipping box, no repair; 3 repeats); and a jittered
    pass (3 repeats). A method whose first run exceeds 100 s is repeated only twice.
 4. Results, in `results/<jobid>/`: `report.md` (+ PNG charts), `results*.json` (all numbers; written after
    every dataset, so partial results survive a crash), `run*.log` (full console output).
@@ -68,7 +74,8 @@ srun --partition=gpu_test --gres=gpu:1 --cpus-per-task=8 --mem=32G --time=00:30:
 module load anaconda3/2023.09-0/none-none && source activate $WORKDIR/envs/delaunay
 export CUDA_HOME=$CONDA_PREFIX PARAGRAM_MAX_PLANES=128 PARAGRAM_MAX_VERTS=128
 python test_delaunay_surfaces.py --no-analytic --models --ply data/*.ply --unit-cube --repeats 2 --verbose \
-  --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --json results/test.json
+  --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
+  --geodel-threads $SLURM_CPUS_PER_TASK --json results/test.json
 ```
 
 ## Troubleshooting (observed on Ruche)
@@ -93,7 +100,9 @@ is mapped, raw `cuInit` / `cudaMalloc` error codes, a tiny `nvcc`-built CUDA pro
 --verbose                     timestamped progress on stderr
 --paragram-bbox-pad 10 | -1   relative clipping pad (patched Paragram) | upstream absolute 1.0
 --repair on|off, --repair-hull on|off   exact CPU repair of failed / convex-hull cells (capped at 20 % of the points)
---gdel3d auto|on|off, --dewall-bin PATH, --cgal-bin PATH, --cgal-python PATH
+--gdel3d auto|on|off, --geodel auto|on|off, --geodel-threads N (0 = SLURM_CPUS_PER_TASK, else all cores)
+--dewall-bin PATH, --gstar4d-bin PATH, --gstar4d-grid 256 (its PBA grid), --gstar4d-facet-max N
+--cgal-bin PATH, --cgal-python PATH
 --n 20000, --models ..., --ply ..., --jitter 1e-6, --adjacency auto|paragram|qhull|ref-edges
 ```
 Build variants of Paragram: `PARAGRAM_MAX_PLANES` / `PARAGRAM_MAX_VERTS` (default 64; the job uses 128),
@@ -107,8 +116,8 @@ extension cache; the job does a warm-up call before timing.
 - `voronoi_to_delaunay.py` — Voronoi adjacency → Delaunay tetrahedra (torch, GPU or CPU).
 - `paragram_repair.py` — exact CPU fallback for Paragram's failed / hull cells.
 - `cgal_delaunay.cpp` — parallel CGAL Delaunay command-line tool.
-- `patch_paragram.py`, `patch_pygdel3d.py`, `patch_dewall.py` — source patches applied to the upstream
-  repositories at setup time (documented at the top of each file).
+- `patch_paragram.py`, `patch_pygdel3d.py`, `patch_dewall.py`, `patch_gstar4d.py` — source patches applied
+  to the upstream repositories at setup time (documented at the top of each file).
 - `setup_ruche.sh`, `run_ruche.sbatch` — cluster setup and SLURM job.
 - `data/` — the two point clouds. `third_party/`, `bin/`, `results/` are created by the setup / jobs.
 
@@ -120,3 +129,11 @@ extension cache; the job does a warm-up call before timing.
   loses edges silently on unbounded (hull) cells and on near-co-spherical input; the CPU repair fixes what
   is flagged or on the hull, and the report states what fraction of cells was recomputed on the CPU.
 - Local DeWall is exact but very slow on near-co-spherical input (hundreds of seconds for 20k sphere points).
+- gStar4D is from 2013 and needs three source changes to be usable, all in `patch_gstar4d.py`: its discrete
+  Voronoi stage uses the texture-reference API, removed in CUDA 12 (replaced by `__ldg` loads through device
+  pointers, numerically identical); its PLY writer split each tetrahedron into three triangles at 6 digits
+  of precision (now one 4-index line at 9 digits, enough to identify the points exactly); and it built only
+  for `sm_35`. It is compiled with `-fmad=false`, without which the GPU-side Shewchuk predicates stop being
+  exact. It also drops duplicate points, which the benchmark reports.
+- GeoDel is the only CPU-parallel method besides CGAL, and gets the same core count as CGAL parallel
+  (`--geodel-threads $SLURM_CPUS_PER_TASK`), so the two are directly comparable.
