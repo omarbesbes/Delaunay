@@ -1,0 +1,5 @@
+numpy
+scipy
+matplotlib
+certifi
+cgal          # official CGAL Python bindings (wheels for Python 3.8-3.12) - fallback reference only

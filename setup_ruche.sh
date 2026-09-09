@@ -1,0 +1,75 @@
+#!/bin/bash
+# One-time environment setup on the Ruche LOGIN node (needs internet; the compute nodes may not have it).
+# Creates a self-contained conda env in $WORKDIR with Python 3.12, CUDA 12.8 (nvcc), GCC 13, torch cu128,
+# CGAL headers + TBB, then builds: the parallel CGAL tool, Paragram (patched), pyGDel3D (patched) and
+# Local DeWall (patched).  Usage:  bash setup_ruche.sh        (takes ~15-30 min)
+set -euo pipefail
+cd "$(dirname "$0")"
+ROOT=$PWD
+: "${WORKDIR:?WORKDIR is not set (are you on Ruche?)}"
+ENV=${DELAUNAY_ENV:-$WORKDIR/envs/delaunay}
+ARCHS=${TORCH_CUDA_ARCH_LIST:-"7.0;8.0"}       # V100 (gpu, gpu_test) and A100 (gpua100)
+
+echo "== [1/7] conda environment: $ENV"
+module purge
+module load anaconda3/2023.09-0/none-none
+export CONDA_PKGS_DIRS=$WORKDIR/.conda/pkgs      # keep the 50 GB home quota free
+mkdir -p "$CONDA_PKGS_DIRS"
+if [ ! -d "$ENV" ]; then
+  conda create -y -p "$ENV" -c conda-forge \
+    python=3.12 "cuda-toolkit=12.8" "cuda-nvcc=12.8" gxx_linux-64=13 gcc_linux-64=13 \
+    cmake ninja tbb tbb-devel gmp mpfr cgal-cpp boost-cpp git
+fi
+source activate "$ENV"
+export CUDA_HOME=$CONDA_PREFIX
+export TORCH_CUDA_ARCH_LIST=$ARCHS
+export CC=${CC:-x86_64-conda-linux-gnu-gcc}
+export CXX=${CXX:-x86_64-conda-linux-gnu-g++}
+echo "python: $(python -V) | nvcc: $(nvcc --version | tail -1) | host compiler: $($CXX --version | head -1)"
+
+echo "== [2/7] python packages (torch cu128, numpy, scipy, matplotlib, cgal bindings)"
+pip install -q torch --index-url https://download.pytorch.org/whl/cu128
+pip install -q numpy scipy matplotlib certifi cgal ninja packaging rich
+python -c "import torch, CGAL.CGAL_Triangulation_3; print('torch', torch.__version__, '| CGAL bindings OK')"
+
+echo "== [3/7] parallel CGAL tool (cgal_delaunay)"
+$CXX -O3 -std=c++17 -DCGAL_LINKED_WITH_TBB -I"$CONDA_PREFIX/include" cgal_delaunay.cpp \
+  -o bin/cgal_delaunay -L"$CONDA_PREFIX/lib" -Wl,-rpath,"$CONDA_PREFIX/lib" -ltbb -ltbbmalloc -lgmp -lmpfr
+python - <<'PY'
+import numpy as np, subprocess, os
+pts = np.random.default_rng(0).random((20000, 3)); pts.astype("<f8").tofile("/tmp/_pts.f64")
+out = subprocess.run(["bin/cgal_delaunay", "/tmp/_pts.f64", "/tmp/_tets.i32"], capture_output=True, text=True, check=True).stdout
+print("cgal_delaunay:", out.strip())
+PY
+
+echo "== [4/7] Paragram (patched: relative clipping pad, cell budget)"
+[ -d third_party/paragram ] || git clone -q --recursive https://github.com/zenseact/paragram.git third_party/paragram
+python patch_paragram.py third_party/paragram
+pip install -q third_party/paragram
+python -c "import paragram, inspect; print('paragram import OK; bbox_pad:', 'bbox_pad' in inspect.signature(paragram.voronoi_diagram).parameters)"
+echo "   (Paragram's CUDA extension is JIT-compiled at first use, inside the SLURM job on the GPU node)"
+
+echo "== [5/7] pyGDel3D (patched: dead-tet flags, phase timers, TORCH_CUDA_ARCH_LIST)"
+[ -d third_party/pyGDel3D ] || git clone -q https://github.com/half-potato/pyGDel3D.git third_party/pyGDel3D
+python patch_pygdel3d.py third_party/pyGDel3D
+pip install -q --no-build-isolation --no-deps third_party/pyGDel3D
+python -c "import gdel3d; print('pyGDel3D OK; get_stats:', hasattr(gdel3d.DelOutput, 'get_stats'))"
+
+echo "== [6/7] Local DeWall (patched for Linux; built for $ARCHS)"
+[ -d third_party/Local-DeWall ] || git clone -q https://github.com/WuhengGao/Local-DeWall.git third_party/Local-DeWall
+python patch_dewall.py third_party/Local-DeWall
+GENCODE=""
+for a in ${ARCHS//;/ }; do a=${a/./}; GENCODE="$GENCODE -gencode arch=compute_$a,code=sm_$a"; done
+D=third_party/Local-DeWall
+nvcc -O3 -std=c++17 -rdc=true -I$D/include $GENCODE -Xcompiler -fopenmp \
+  $D/src/delaunay_kernels.cu $D/src/delaunay_solver.cu $D/src/spatial_hash.cu $D/src/main_delaunay.cu \
+  -x cu $D/src/sampler.cpp -o bin/dewall -lgomp
+echo "   built bin/dewall"
+
+echo "== [7/7] prefetch meshes for the full suite (optional; compute nodes may lack internet)"
+python - <<'PY' || echo "   mesh download failed (only needed for the full suite)"
+import test_delaunay_surfaces as T
+for m in T.DEFAULT_MODELS:
+    T.load_obj_vertices(m); print("  cached", m)
+PY
+echo "== setup done. Submit a job with:  sbatch run_ruche.sbatch"

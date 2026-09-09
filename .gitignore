@@ -1,0 +1,7 @@
+third_party/
+bin/
+results/
+__pycache__/
+*.pyc
+*.o
+*.tmp
