@@ -42,9 +42,11 @@ export CXX=${CXX:-x86_64-conda-linux-gnu-g++}
 echo "python: $(python -V) | nvcc: $(nvcc --version | tail -1) | host compiler: $($CXX --version | head -1)"
 
 echo "== [2/7] python packages (torch cu128, numpy, scipy, matplotlib, cgal bindings)"
-pip install -q torch --index-url https://download.pytorch.org/whl/cu128
+# cu128 wheels have no Volta (sm_70) kernels: for the V100 partitions (gpu, gpu_test) install
+# the cu126 build instead with  TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 bash setup_ruche.sh
+pip install -q torch --index-url "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
 pip install -q numpy scipy matplotlib certifi cgal ninja packaging rich
-python -c "import torch, CGAL.CGAL_Triangulation_3; print('torch', torch.__version__, '| CGAL bindings OK')"
+python -c "import torch, CGAL.CGAL_Triangulation_3; print('torch', torch.__version__, '| CUDA', torch.version.cuda, '| GPU archs', torch.cuda.get_arch_list(), '| CGAL bindings OK')"
 
 echo "== [3/7] parallel CGAL tool (cgal_delaunay)"
 $CXX -O3 -std=c++17 -pthread -DCGAL_LINKED_WITH_TBB -I"$CONDA_PREFIX/include" cgal_delaunay.cpp \

@@ -40,7 +40,14 @@ torch cu128, CGAL headers + TBB), so nothing depends on the cluster's module ver
    (parallel CGAL), installs the patched Paragram and pyGDel3D, builds `bin/dewall` (Local DeWall) for
    V100 and A100 (`TORCH_CUDA_ARCH_LIST="7.0;8.0"`), and pre-downloads the meshes. Each step prints a
    check line; if one fails, the message says which tool is missing and the benchmark still runs without it.
-3. Submit the benchmark (A100 partition by default; edit `#SBATCH --partition=gpu` for V100):
+3. Submit the benchmark. **Use the A100 partition** (`gpua100`, the default in the script): the
+   `cu128` torch wheels contain no Volta (sm_70) kernels, so Paragram and gDel3D cannot run on the
+   V100 partitions with that build. To use `gpu` / `gpu_test` (V100) instead, reinstall torch with
+   Volta support first:
+   ```bash
+   TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 bash setup_ruche.sh
+   ```
+   (Local DeWall and CGAL are standalone binaries and run on any of the partitions.)
    ```bash
    sbatch run_ruche.sbatch                 # the two point clouds, 10 timed repeats per method
    FULL=1 sbatch run_ruche.sbatch          # + analytic surfaces and meshes (20k samples each)

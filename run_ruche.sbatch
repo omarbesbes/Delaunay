@@ -58,24 +58,61 @@ export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-$WORKDIR/.cache/torch_extens
 mkdir -p "$TORCH_EXTENSIONS_DIR"
 echo "GPU compute capability: $ARCH | torch extension cache: $TORCH_EXTENSIONS_DIR"
 
-# The GPU can be momentarily unavailable (exclusive-process mode with a previous job's process still
-# holding it, or a driver still cleaning up), so wait for a usable context instead of crashing.
-echo "== waiting for a usable CUDA context"
+# Probe CUDA: report the real error, retry only if the device is merely busy, and stop immediately
+# if this torch build has no kernels for the GPU (the cu128 wheels contain no Volta/sm_70).
+cuda_probe() {
+  python - <<'PY'
+import sys
+
+import torch
+
+try:
+    torch.zeros(1, device="cuda")
+    torch.cuda.synchronize()
+except Exception as exc:  # noqa: BLE001
+    msg = str(exc)
+    print(f"CUDA probe failed: {msg}", file=sys.stderr)
+    try:
+        cap = torch.cuda.get_device_capability(0)
+    except Exception:  # noqa: BLE001
+        cap = None
+    print(
+        f"torch {torch.__version__} (built for CUDA {torch.version.cuda}) has kernels for "
+        f"{torch.cuda.get_arch_list()}; this GPU is compute capability {cap}",
+        file=sys.stderr,
+    )
+    sys.exit(2 if ("no kernel image" in msg or "not supported" in msg) else 1)
+print(
+    f"CUDA OK: {torch.cuda.get_device_name(0)} sm_{''.join(map(str, torch.cuda.get_device_capability(0)))} "
+    f"| torch {torch.__version__} archs: {torch.cuda.get_arch_list()}"
+)
+PY
+}
+
+echo "== CUDA readiness"
 for attempt in $(seq 1 30); do
-  if python -c "import torch; torch.zeros(1, device='cuda'); torch.cuda.synchronize()" 2>/dev/null; then
-    echo "   CUDA context OK on attempt $attempt"
-    break
-  fi
-  if [ "$attempt" = 30 ]; then
-    echo "   FAILED: no usable CUDA context after 5 minutes. Diagnostics:"
-    nvidia-smi --query-gpu=compute_mode,memory.used --format=csv
-    nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
-    python -c "import torch; torch.zeros(1, device='cuda')" || true
-    echo "   If compute_mode is Exclusive_Process and another PID holds the GPU, resubmit (possibly"
-    echo "   on another partition: --partition=gpu for V100, or gpu_test for a 1 h slot)."
+  set +e
+  probe=$(cuda_probe 2>&1)
+  rc=$?
+  set -e
+  echo "$probe" | sed 's/^/   /'
+  [ "$rc" = 0 ] && break
+  if [ "$rc" = 2 ]; then
+    echo "   FAILED: this torch build has no kernels for this GPU architecture."
+    echo "   Either submit to the A100 partition (#SBATCH --partition=gpua100, sm_80), or reinstall torch"
+    echo "   with Volta support for the V100 partitions:"
+    echo "     source activate \$DELAUNAY_ENV && pip install --force-reinstall torch --index-url https://download.pytorch.org/whl/cu126"
+    echo "   (Paragram and gDel3D are torch extensions and need a torch that runs on this GPU;"
+    echo "    Local DeWall and CGAL are standalone and unaffected.)"
     exit 1
   fi
-  echo "   attempt $attempt/30: GPU not usable yet, waiting 10 s"
+  if [ "$attempt" = 30 ]; then
+    echo "   FAILED: no usable CUDA context after 5 minutes (device busy). Diagnostics:"
+    nvidia-smi --query-gpu=compute_mode,memory.used --format=csv
+    nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+    exit 1
+  fi
+  echo "   attempt $attempt/30: device busy, waiting 10 s"
   sleep 10
 done
 
