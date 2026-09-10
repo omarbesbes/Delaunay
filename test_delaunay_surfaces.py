@@ -818,6 +818,9 @@ def _read_mat(path: str, kind: str) -> np.ndarray:
     return np.frombuffer(payload, dtype=dt, count=rows * cols).reshape(rows, cols)
 
 
+DEWALL_TET_CAPACITY = 140001  # rows in the tool's tetrahedron array; see run_dewall()
+
+
 def run_dewall(
     points: np.ndarray,
     binary: str,
@@ -907,6 +910,14 @@ def run_dewall(
     tets = orig_of_sorted[ts[finite]]
     tets = np.unique(np.sort(tets, axis=1), axis=0)
     info["duplicate_tets"] = int(finite.sum() - len(tets))
+    # Observed on klein-bottle (140883 reference tets -> 140001), trefoil-tube (217183 -> 140001)
+    # and torus-random (238741 -> 140001): the tool's output array holds 140001 rows and anything
+    # beyond that is dropped without a word, leaving a mesh with holes.
+    if len(ts) >= DEWALL_TET_CAPACITY:
+        info["truncated"] = (
+            f"the tool returned {len(ts)} tetrahedra, its fixed output capacity "
+            f"({DEWALL_TET_CAPACITY}); a larger triangulation is silently truncated"
+        )
     # The tool triangulated the normalised float32 copy of the points, a slightly different point
     # set (moved by up to one float32 ulp).  Hand that set back, mapped into the original frame
     # with the exact inverse affine map in float64 (which preserves Delaunay-ness), so that the
@@ -1241,6 +1252,8 @@ def _fmt_method_info(label: str, info: dict) -> str:
         )
     if label == "dewall":
         st = ", ".join(f"{k}={v}" for k, v in info.get("status", {}).items())
+        if info.get("truncated"):
+            st = (st + "; " if st else "") + "TRUNCATED: " + info["truncated"]
         return (
             f"dewall: {info['raw_tets']} raw tets, {info['infinite_tets']} infinite, {info['duplicate_tets']} duplicate, "
             f"gpu {info.get('gpu_seconds', float('nan')):.3f}s (wall {info['wall_seconds']:.2f}s incl. file I/O), "

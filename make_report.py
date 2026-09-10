@@ -136,8 +136,25 @@ def method_verdict(row, m: str) -> str:
         and c["ref_only"] == 0
     ):
         return f"VALID + {flats} zero-volume tets"
-    if g["delaunay_violations"] == 0 and (ties or ref_only.get("tie", 0)):
+    # A tie difference does not change the mesh: the volume still matches the convex hull.  A large
+    # volume error with "ties" among the missing tets means tetrahedra are genuinely absent (Local
+    # DeWall truncates its output at 140001 tetrahedra), so check that before believing the ties.
+    if (
+        g["delaunay_violations"] == 0
+        and (ties or ref_only.get("tie", 0))
+        and g["volume_rel_err"] < 1e-6
+    ):
         return f"TIE-BREAK ({c['ref_only']} ref-only / {c['method_only']} extra)"
+    if c["ref_only"] and g["volume_rel_err"] >= 1e-6:
+        pct = (
+            100 * (1.0 - g["total_volume"] / g["hull_volume"])
+            if g["hull_volume"]
+            else 0.0
+        )
+        return (
+            f"INCOMPLETE ({c['ref_only']} tets missing, {pct:.1f}% of the hull volume, "
+            f"Euler {g['euler']})"
+        )
     if (
         g["delaunay_violations"] == 0
         and g["nonmanifold_faces"] == 0

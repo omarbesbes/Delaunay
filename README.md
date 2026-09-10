@@ -220,6 +220,13 @@ extension cache; the job does a warm-up call before timing.
   not an exception, so no `except` catches it: every pass therefore runs with `--resume` and is
   restarted up to `ATTEMPTS=4` times, which keeps the datasets already measured, records the
   measurement that killed the process as `CRASHED`, and continues with the rest.
+- **Local DeWall truncates its output at 140 001 tetrahedra**, without an error. Seen on
+  `klein-bottle` (140 883 reference tets -> 140 001), `trefoil-tube` (217 183 -> 140 001) and
+  `torus-random` (238 741 -> 140 001): the excess is dropped, leaving a mesh with holes -- 36 % of
+  the hull volume missing on `trefoil-tube`, Euler -379, and only 17 017 of the 20 000 points used.
+  `run_dewall` now reports this as `TRUNCATED`, and the verdict calls it INCOMPLETE rather than a
+  tie-break (the volume error is what distinguishes the two: a genuine tie difference leaves the
+  volume exactly right).
 - Local DeWall is exact but very slow on near-co-spherical input (hundreds of seconds for 20k sphere
   points), so with the default `--tool-timeout 10` it is reported as failed on those datasets;
   raise the limit (`TOOL_TIMEOUT=120`) if those numbers matter.
