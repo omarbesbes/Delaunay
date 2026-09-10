@@ -121,7 +121,7 @@ def densified(
     cloud: np.ndarray,
     n: int,
     rng: np.random.Generator,
-    max_circumradius: float = 3.0,
+    max_circumradius: float = 4.0,
 ) -> tuple[np.ndarray, float]:
     """n points in the SAME volume: the cloud plus points interpolated inside its own tetrahedra.
 
@@ -144,16 +144,24 @@ def densified(
       of a spacing from an existing one, manufacturing the near-coincident pairs this benchmark is
       meant to measure.  Delaunay tetrahedra tile the space, so they have no such bias (1.4%).
 
-    Tetrahedra whose **circumradius** exceeds `max_circumradius` median spacings are dropped, which
-    is what keeps new points out of the cloud's voids.  Edge length is the wrong measure: it
-    discards 63% of the tetrahedra (mostly slivers, whose interiors stay close to their own
-    vertices anyway) and biases the sample into the dense regions, over-tightening the spacing by
-    70%.  Measured at 4x the points, with the ideal ratio 1.59:
+    Tetrahedra whose **circumradius** exceeds `max_circumradius` median spacings are dropped, to
+    keep new points out of the cloud's voids.  This trades one defect for another and the choice is
+    second order -- measured at 4x the points, where the ideal spacing ratio is 1.59:
 
-        filter                    tets kept   spacing ratio   new points >3 spacings out
-        none                          100%            1.63                     2.47%
-        longest edge <= 3 spacings     37%            2.70                     0%
-        circumradius <= 3 spacings     84%            1.83                     0%   <- default
+        circumradius cap   tets kept   spacing ratio   >3 spacings out   worst   tets/point
+        2 spacings              58%      2.19 (+38%)             0%       1.9x         6.55
+        3 spacings              84%      1.82 (+14%)             0%       2.8x         6.57
+        4 spacings              91%      1.72  (+9%)          0.15%       3.9x         6.58  <- default
+        5 spacings              94%      1.69  (+7%)          0.50%       4.5x         6.58
+        none                   100%      1.62  (+2%)          2.59%      11.3x         6.59
+
+    A tighter cap keeps the new points near real ones but concentrates them where the cloud is
+    already dense; no cap gets the cube-root density law nearly exact but places 2.6% of the points
+    in empty space.  **Tetrahedra per point is 6.55-6.59 throughout**, so the workload this
+    benchmark measures is the same either way; 4 spacings is simply the knee of the curve.  Edge
+    length is a poor criterion by comparison: at 3 spacings it discards 63% of the tetrahedra
+    (mostly slivers, whose interiors stay close to their own vertices anyway) and over-tightens the
+    spacing by 70%.
 
     The interpolation is volumetric rather than a tangent-plane resampling because these clouds are
     not surfaces: 78% of 13-point neighbourhoods are isotropic blobs and under 1% are planar."""
@@ -969,11 +977,12 @@ def main() -> int:
     ap.add_argument(
         "--max-circumradius",
         type=float,
-        default=3.0,
+        default=4.0,
         help="drop a tetrahedron whose circumradius exceeds this many median point spacings, so "
-        "--upsample densify never places a point in a void (default 3; measured to keep 84% of the "
-        "tetrahedra, put 0% of the new points more than 3 spacings from a real one, and track the "
-        "cube-root density law to 1.83 against an ideal 1.59)",
+        "--upsample densify does not place points in the cloud's voids (default 4, the knee: 91%% "
+        "of the tetrahedra kept, 0.15%% of new points more than 3 spacings from a real one, "
+        "cube-root density law tracked to 1.72 against an ideal 1.59; use 3 for none in a void, "
+        "or a large value for the most faithful density)",
     )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--json", default="results/scaling.json")

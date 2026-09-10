@@ -142,13 +142,18 @@ Two things to know about the sizes:
     |---|---|---|
     | volume-weighted tetrahedra | 1.02 | 39.9 % |
     | point + 3 nearest neighbours | 3.53 | (6 % within 0.2 spacings: manufactured close pairs) |
-    | uniform per tetrahedron, no filter | 1.63 | 2.5 % |
-    | **uniform per tetrahedron, circumradius <= 3 spacings** | **1.83** | **0 %** |
+    | uniform per tetrahedron, no filter | 1.62 | 2.6 % |
+    | uniform per tetrahedron, circumradius <= 3 spacings | 1.82 | 0 % |
+    | **uniform per tetrahedron, circumradius <= 4 spacings** | **1.72** | **0.15 %** |
     Volume weighting fails because Delaunay fills the convex hull and 63 % of its tetrahedra carry
     96 % of the volume, so the new points pour into the voids. Tetrahedra built from a point and
     its nearest neighbours fail because they are anchored on existing points, so new points pile up
-    next to old ones. `--max-circumradius` (3) keeps 84 % of the tetrahedra and no point lands in a
-    void; edge length is the wrong measure, discarding 63 % of them and over-tightening by 70 %.
+    next to old ones. `--max-circumradius` trades the two defects against each other -- a tighter cap
+    keeps points near real ones but concentrates them where the cloud is already dense, no cap
+    gets the density law nearly exact but puts 2.6 % of points in empty space -- and the default
+    of 4 is the knee. **Tetrahedra per point is 6.55-6.59 for every setting including no filter**,
+    so the workload measured is the same either way. Edge length is a poor criterion by
+    comparison, discarding 63 % of the tetrahedra and over-tightening by 70 %.
     The interpolation is volumetric rather than a tangent-plane resampling because these clouds are
     not surfaces: 78 % of 13-point neighbourhoods are isotropic blobs and under 1 % are planar.
     Tetrahedra per point holds at 6.5-6.6 from 1x to 10x density.
