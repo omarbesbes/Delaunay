@@ -491,15 +491,27 @@ def _log_axis(ax) -> None:
     ax.tick_params(labelsize=8)
 
 
-def fit_exponent(ns, ts) -> float | None:
-    """Least-squares slope of log t vs log N, i.e. the alpha of t ~ N^alpha."""
+def fit_exponent(ns, ts) -> tuple[float, float] | None:
+    """(alpha, worst relative residual) for t ~ N^alpha, fitted on log t.
+
+    The residual matters as much as the exponent: over 2k..1M only CGAL's single-threaded
+    insertion is an actual power law (alpha 1.00, residual 2%).  The others carry a fixed cost at
+    the small-N end and change regime above it, so one exponent is a line drawn through a curve --
+    it is reported with its residual so a bad fit is visible instead of authoritative."""
     pts = [(math.log(n), math.log(t)) for n, t in zip(ns, ts) if n > 0 and t > 0]
     if len(pts) < 3:
         return None
     xs, ys = zip(*pts)
     mx, my = statistics.fmean(xs), statistics.fmean(ys)
     den = sum((x - mx) ** 2 for x in xs)
-    return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den if den else None
+    if not den:
+        return None
+    a = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den
+    b = my - a * mx
+    resid = max(
+        abs(math.exp(b + a * x) - math.exp(y)) / math.exp(y) for x, y in zip(xs, ys)
+    )
+    return a, resid
 
 
 def plot(payload: dict, path: str, min_seconds: float = 2e-3) -> list[str]:
@@ -515,9 +527,10 @@ def plot(payload: dict, path: str, min_seconds: float = 2e-3) -> list[str]:
         print("nothing to plot")
         return []
     fig, axes = plt.subplots(
-        1, len(clouds), figsize=(7.5 * len(clouds), 5.6), squeeze=False, sharey=True
+        2, len(clouds), figsize=(7.5 * len(clouds), 9.4), squeeze=False
     )
-    for ax, cloud in zip(axes[0], clouds):
+    for col, cloud in enumerate(clouds):
+        ax, ax2 = axes[0][col], axes[1][col]
         for m in ALL_METHODS:
             for jit in jitters:
                 sel = sorted(
@@ -538,26 +551,28 @@ def plot(payload: dict, path: str, min_seconds: float = 2e-3) -> list[str]:
                 # (kernel launches, allocations, process spawn), which flattens the slope.
                 big = [(n, t) for n, t in zip(ns, ts) if t >= min_seconds and n >= 1e5]
                 small = [(n, t) for n, t in zip(ns, ts) if t >= min_seconds]
-                a = fit_exponent(*zip(*big)) if len(big) >= 4 else None
-                if a is None and len(small) >= 4:
-                    a = fit_exponent(*zip(*small))
+                fit = fit_exponent(*zip(*big)) if len(big) >= 4 else None
+                if fit is None and len(small) >= 4:
+                    fit = fit_exponent(*zip(*small))
                 label = f"{LABELS[m]}" + (" + jitter" if jit else "")
-                if a is not None:
-                    label += f"  ($\\alpha$={a:.2f})"
-                ax.plot(
-                    ns,
-                    ts,
-                    marker="o" if not jit else "^",
-                    ms=3.5,
-                    lw=1.5,
-                    ls="-" if not jit else "--",
-                    color=COLORS[m],
-                    alpha=1.0 if not jit else 0.65,
-                    label=label,
-                )
+                if fit is not None:
+                    label += f"  ($\\alpha$={fit[0]:.2f}$\\pm${100 * fit[1]:.0f}%)"
+                style = {
+                    "marker": "o" if not jit else "^",
+                    "ms": 3.5,
+                    "lw": 1.5,
+                    "ls": "-" if not jit else "--",
+                    "color": COLORS[m],
+                    "alpha": 1.0 if not jit else 0.65,
+                }
+                ax.plot(ns, ts, label=label, **style)
+                # Cost per point: the rise on the left is the fixed overhead, the plateau on the
+                # right is the marginal cost -- both read directly, with no model assumed.
+                ax2.plot(ns, [1e6 * t / n for n, t in zip(ns, ts)], **style)
         tiled = [r["n"] for r in runs if r["cloud"] == cloud and r.get("tiles", 1) > 1]
         if tiled:
-            ax.axvline(min(tiled), color="k", lw=0.8, ls=":", alpha=0.6)
+            for a_ in (ax, ax2):
+                a_.axvline(min(tiled), color="k", lw=0.8, ls=":", alpha=0.6)
             ax.text(
                 min(tiled),
                 ax.get_ylim()[0],
@@ -567,12 +582,15 @@ def plot(payload: dict, path: str, min_seconds: float = 2e-3) -> list[str]:
                 va="bottom",
                 alpha=0.7,
             )
-        _log_axis(ax)
-        ax.set_yscale("log")
-        ax.set_xlabel("points")
+        for a_ in (ax, ax2):
+            _log_axis(a_)
+            a_.set_yscale("log")
+            a_.set_xlabel("points")
+            a_.grid(True, which="both", alpha=0.25)
         ax.set_title(cloud)
-        ax.grid(True, which="both", alpha=0.25)
+        ax2.set_title(f"{cloud}: cost per point", fontsize=10)
     axes[0][0].set_ylabel("seconds (mean of the timed runs)")
+    axes[1][0].set_ylabel("microseconds per point")
     axes[0][-1].legend(fontsize=7, loc="upper left", framealpha=0.9)
     fig.suptitle(
         "3D Delaunay: time vs number of points"
