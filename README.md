@@ -119,7 +119,11 @@ Outputs:
 
 * `scaling.png` -- log-log, one panel per cloud, solid without jitter and dashed with it, the fitted
   exponent alpha of *t ~ N^alpha* in the legend.
-* `scaling_breakdown_<cloud>.png` -- **where the time goes as N grows**: one row per jitter, a
+* `scaling_breakdown_<cloud>.png` -- **where the time goes as N grows**. Where a method's own
+  timers do not add up to the wall clock, the difference is drawn as a grey band: gDel3D reports
+  phase timers for its algorithm only, so allocating its device buffers (sized by n) and uploading
+  the points fall outside them -- 4 % of the wall time at 2k rising to 36 % at 1M. Paragram, Local
+  DeWall and gStar4D have no such gap, since their reported phases cover the whole measurement. one row per jitter, a
   left-hand panel with each method's CPU share, then one stacked panel per method. Paragram is
   broken into its three phases (GPU adjacency, GPU 4-clique conversion, CPU exact repair); the
   others into GPU and CPU totals, with the command-line tools' file exchange drawn as a dotted line

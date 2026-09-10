@@ -889,11 +889,31 @@ def plot_breakdown(payload: dict, stem: str) -> list[str]:
                     if any(r.get(key) for r in pts)
                 ]
                 if parts and ns:
+                    # What the method's own timers do not account for: gDel3D reports phase
+                    # timers for its algorithm only, so constructing its device buffers (sized by
+                    # n) and uploading the points fall outside them -- 4% of the wall time at 2k
+                    # rising to 36% at 1M.  Show it rather than leaving the stack short of the
+                    # total, which looks like an arithmetic error.
+                    residual = [
+                        max(0.0, r["seconds"] - sum(v[i] for _, _, v in parts))
+                        for i, r in enumerate(pts)
+                    ]
+                    bands = list(parts)
+                    if max(residual, default=0.0) > 0.02 * max(
+                        r["seconds"] for r in pts
+                    ):
+                        bands.append(
+                            (
+                                "not timed by the method (setup, transfer)",
+                                "#dddddd",
+                                residual,
+                            )
+                        )
                     ax.stackplot(
                         ns,
-                        *[v for _, _, v in parts],
-                        labels=[lab for lab, _, _ in parts],
-                        colors=[c for _, c, _ in parts],
+                        *[v for _, _, v in bands],
+                        labels=[lab for lab, _, _ in bands],
+                        colors=[c for _, c, _ in bands],
                         alpha=0.85,
                     )
                 if ns:
