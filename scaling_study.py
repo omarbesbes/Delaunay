@@ -284,6 +284,7 @@ def run_once(method: str, pts: np.ndarray, args) -> dict:
             "tets": len(tets),
             "loops": info.get("consistency_loops"),
             "missing_points": info.get("missing_points"),
+            "phases": info.get("phases_seconds"),
         }
     if method == "dewall":
         in_unit = bool(pts.min() >= 0.0 and pts.max() < 1.0)
@@ -293,12 +294,19 @@ def run_once(method: str, pts: np.ndarray, args) -> dict:
             prenormalized=in_unit,
             timeout=args.tool_timeout or None,
         )
+        # Keep its phase timers and status counters: its third stage,
+        # PostProcessingPost_kernel<<<1,1>>>, is single-threaded, so a handful of extra points
+        # falling into it produces a multi-second spike at one particular size, and without these
+        # fields such a spike cannot be attributed.
         return {
             "total": secs,
             "gpu": info.get("gpu_seconds"),
             "cpu": 0.0,
             "io": info.get("io_seconds"),
             "tets": len(tets),
+            "phases": info.get("phases_seconds"),
+            "status": info.get("status"),
+            "truncated": info.get("truncated"),
         }
     if method == "geodel":
         tets, secs, info = T.run_geodel(pts, nb_threads=args.threads)
@@ -417,6 +425,9 @@ def measure(method: str, pts: np.ndarray, args) -> dict:
         "conversion",
         "loops",
         "missing_points",
+        "phases",
+        "status",
+        "truncated",
     ):
         vals = [r[key] for r in runs if r.get(key) is not None]
         if vals:
