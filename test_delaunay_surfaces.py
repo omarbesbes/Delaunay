@@ -818,7 +818,13 @@ def _read_mat(path: str, kind: str) -> np.ndarray:
     return np.frombuffer(payload, dtype=dt, count=rows * cols).reshape(rows, cols)
 
 
-DEWALL_TET_CAPACITY = 140001  # rows in the tool's tetrahedron array; see run_dewall()
+# The tool allocates its tetrahedron array as a fixed number of tetrahedra per point
+# (delaunay_solver.cu: `tet = cuVector<int4>(7 * nv)`), with no bound check, so a triangulation
+# needing more is silently truncated to that capacity.  patch_dewall.py raises the factor to 16;
+# both are checked, since a binary built before that patch is still 7.
+DEWALL_TETS_PER_POINT = tuple(
+    sorted({7, 16, int(os.environ.get("DEWALL_TETS_PER_POINT", "16"))})
+)
 
 
 def run_dewall(
@@ -913,11 +919,14 @@ def run_dewall(
     # Observed on klein-bottle (140883 reference tets -> 140001), trefoil-tube (217183 -> 140001)
     # and torus-random (238741 -> 140001): the tool's output array holds 140001 rows and anything
     # beyond that is dropped without a word, leaving a mesh with holes.
-    if len(ts) >= DEWALL_TET_CAPACITY:
-        info["truncated"] = (
-            f"the tool returned {len(ts)} tetrahedra, its fixed output capacity "
-            f"({DEWALL_TET_CAPACITY}); a larger triangulation is silently truncated"
-        )
+    for k in DEWALL_TETS_PER_POINT:
+        if len(ts) == k * n + 1:
+            info["truncated"] = (
+                f"the tool returned exactly {len(ts)} tetrahedra = {k} per point + 1, the capacity "
+                f"of its output array; the triangulation needs more and was silently truncated "
+                f"(rebuild with a larger -DDEWALL_TETS_PER_POINT, see patch_dewall.py)"
+            )
+            break
     # The tool triangulated the normalised float32 copy of the points, a slightly different point
     # set (moved by up to one float32 ulp).  Hand that set back, mapped into the original frame
     # with the exact inverse affine map in float64 (which preserves Delaunay-ness), so that the

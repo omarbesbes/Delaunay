@@ -15,6 +15,9 @@ Usage of the resulting binary (see README):  dewall <output-prefix> <input.txt> 
   outputs <prefix>x.bin (sorted normalised points, float32) and <prefix>t.bin (int32 tets, 4 per
   row, indices into x.bin; indices >= N are the points at infinity); both files start with two
   uint64 (rows, cols).
+The patched build allocates DEWALL_TETS_PER_POINT (16) tetrahedra per point instead of 7; pass
+-DDEWALL_TETS_PER_POINT=<n> to nvcc to change it, and set the same value in the environment so
+that the benchmark can tell a truncated result from a complete one.
 """
 
 from __future__ import annotations
@@ -50,8 +53,29 @@ EDITS = [
             ("#include <iostream>\n", "#include <iostream>\n#include <string>\n"),
             (
                 "        if (!Sampler::load_file(argv[2], pts, true)) {",
-                "        const bool normalize = !(argc > 3 && std::string(argv[3]) == std::string(\"--no-normalize\"));\n"
-                "        if (!Sampler::load_file(argv[2], pts, normalize)) {",
+                (
+                    "        const bool normalize = !(argc > 3 && std::string(argv[3]) == "
+                    'std::string("--no-normalize"));\n'
+                    "        if (!Sampler::load_file(argv[2], pts, normalize)) {"
+                ),
+            ),
+        ],
+    ),
+    (
+        "src/delaunay_solver.cu",
+        [
+            # The tetrahedron array is allocated as 7 per point with no bound check, so a
+            # triangulation with more than that is silently truncated: on 20k-point tube surfaces
+            # (8-12 tets per point) the tool returned exactly 7*nv+1 tetrahedra and a mesh full of
+            # holes.  int4 is 16 bytes, so 16 per point costs 256 MB at a million points.
+            (
+                "    tet = cuVector<int4>(7 * nv);",
+                (
+                    "#ifndef DEWALL_TETS_PER_POINT\n"
+                    "#define DEWALL_TETS_PER_POINT 16   // was a hard-coded 7 (patch_dewall.py)\n"
+                    "#endif\n"
+                    "    tet = cuVector<int4>((size_t) DEWALL_TETS_PER_POINT * nv);"
+                ),
             ),
         ],
     ),
@@ -103,7 +127,11 @@ def patch(root: str) -> bool:
         if changed:
             with open(path, "w") as f:
                 f.write(src)
-        print(f"{rel}: {changed} edit(s) applied" if changed else f"{rel}: already patched")
+        print(
+            f"{rel}: {changed} edit(s) applied"
+            if changed
+            else f"{rel}: already patched"
+        )
     return ok
 
 
@@ -112,6 +140,8 @@ if __name__ == "__main__":
     root = args[0] if args else "Local-DeWall"
     good = patch(root)
     if "--build" in sys.argv:
-        arch = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--arch=")), "75")
+        arch = next(
+            (a.split("=", 1)[1] for a in sys.argv if a.startswith("--arch=")), "75"
+        )
         print(build_command(root, arch))
     sys.exit(0 if good else 1)

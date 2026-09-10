@@ -220,13 +220,18 @@ extension cache; the job does a warm-up call before timing.
   not an exception, so no `except` catches it: every pass therefore runs with `--resume` and is
   restarted up to `ATTEMPTS=4` times, which keeps the datasets already measured, records the
   measurement that killed the process as `CRASHED`, and continues with the rest.
-- **Local DeWall truncates its output at 140 001 tetrahedra**, without an error. Seen on
-  `klein-bottle` (140 883 reference tets -> 140 001), `trefoil-tube` (217 183 -> 140 001) and
-  `torus-random` (238 741 -> 140 001): the excess is dropped, leaving a mesh with holes -- 36 % of
-  the hull volume missing on `trefoil-tube`, Euler -379, and only 17 017 of the 20 000 points used.
-  `run_dewall` now reports this as `TRUNCATED`, and the verdict calls it INCOMPLETE rather than a
-  tie-break (the volume error is what distinguishes the two: a genuine tie difference leaves the
-  volume exactly right).
+- **Local DeWall allocates 7 tetrahedra per point and silently truncates beyond that.**
+  `delaunay_solver.cu` had `tet = cuVector<int4>(7 * nv)` with no bound check, so a triangulation
+  needing more came back as exactly `7*nv + 1` tetrahedra: `klein-bottle` (140 883 reference tets,
+  7.04 per point) -> 140 001, `trefoil-tube` (10.6 per point) -> 140 001, `torus-random` (11.9 per
+  point) -> 140 001, while every dataset under 7 per point (spheres 3.0, bunny 6.85, armadillo
+  6.84, the two clouds 6.7) was exact. The truncated meshes are badly broken -- 36 % of the hull
+  volume missing on `trefoil-tube`, Euler -379, only 17 017 of 20 000 points used.
+  `patch_dewall.py` raises the factor to 16 (`-DDEWALL_TETS_PER_POINT=<n>` to change it; int4 is
+  16 bytes, so 16 per point costs 256 MB at a million points), `run_dewall` reports a result that
+  sits exactly at the capacity as `TRUNCATED`, and the verdict calls it INCOMPLETE rather than a
+  tie-break -- the volume error is what separates the two, since a genuine tie difference leaves
+  the volume exactly right.
 - Local DeWall is exact but very slow on near-co-spherical input (hundreds of seconds for 20k sphere
   points), so with the default `--tool-timeout 10` it is reported as failed on those datasets;
   raise the limit (`TOOL_TIMEOUT=120`) if those numbers matter.
