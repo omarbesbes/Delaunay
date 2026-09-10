@@ -14,6 +14,8 @@
 #         CLOUD=data/voronoi_jax_068.ply sbatch run_scaling.sbatch        (one cloud, half the time)
 #         REPEATS=1 sbatch run_scaling.sbatch                            (quick pass)
 #         METHODS="geodel cgal_parallel" sbatch run_scaling.sbatch
+#         UPSAMPLE=densify sbatch run_scaling.sbatch   (sizes above 100k by densifying the same
+#                                                       volume instead of tiling copies of it)
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 set +u; module purge; module load anaconda3/2023.09-0/none-none; set -u
@@ -51,11 +53,14 @@ JITTERS=${JITTERS:-"0 1e-6"}
 METHODS=${METHODS:-"paragram gdel3d gstar4d dewall geodel cgal_parallel cgal_sequential"}
 REPEATS=${REPEATS:-3}
 CLOUD=${CLOUD:-"data/voronoi_iarpa_001.ply data/voronoi_jax_068.ply"}
+# How to reach sizes above the cloud's own ~100k points: tile (more area, same resolution) or
+# densify (same area, more resolution -- new points interpolated inside local tetrahedra).
+UPSAMPLE=${UPSAMPLE:-tile}
 
 echo "== warm-up: JIT-compile Paragram's CUDA extension"
 python -c "import torch, paragram; paragram.voronoi_diagram(torch.rand(10000, 3, device='cuda'), bbox_pad=10.0); print('paragram ready')"
 
-echo "== scaling sweep: sizes [$SIZES], jitters [$JITTERS], methods [$METHODS]"
+echo "== scaling sweep: sizes [$SIZES], jitters [$JITTERS], methods [$METHODS], upsample $UPSAMPLE"
 # One process per method, so a library that crashes the interpreter (gDel3D has been seen to
 # segfault on some inputs) only ends its own sweep.  Each process is restarted up to ATTEMPTS
 # times with --resume, which keeps the measurements already written and marks the input that
@@ -71,7 +76,7 @@ for m in $METHODS; do
     # catches a hang anywhere else (124 = the attempt was killed by it).
     timeout "$ATTEMPT_TIMEOUT" python scaling_study.py --ply $CLOUD --sizes $SIZES \
       --jitter $JITTERS --methods "$m" --repeats "$REPEATS" --threads "$SLURM_CPUS_PER_TASK" \
-      --resume --measure-timeout "$MEASURE_TIMEOUT" \
+      --resume --measure-timeout "$MEASURE_TIMEOUT" --upsample "$UPSAMPLE" \
       --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
       --json "$OUT/scaling-$m.json" 2>&1 | tee -a "$OUT/scaling-$m.log" || rc=$?
     [ "$rc" = 0 ] && break

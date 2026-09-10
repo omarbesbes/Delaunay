@@ -131,8 +131,17 @@ Outputs:
 
 Two things to know about the sizes:
 
-* **The clouds have ~100k points each** (99 990 and 99 981), so anything above that is not a
-  subsample. `points_at()` builds it by **tiling**: the cloud is replicated on a k x k x k lattice
+* **Two ways to exceed the cloud's own point count** (`--upsample`, `UPSAMPLE=`), because the clouds
+  hold ~100k points each and the sweep goes to 1M:
+  * `tile` (default) -- **more area, same resolution**: the tiling described below.
+  * `densify` -- **same area, more resolution**: each new point is a Dirichlet(1,1,1,1) convex
+    combination of an existing point and three of its 12 nearest neighbours, i.e. uniform inside
+    that local tetrahedron, rejected when the tetrahedron's longest edge exceeds `--max-edge` (3)
+    median spacings so nothing is placed across a void. One k-d tree query per cloud. The
+    interpolation is volumetric rather than a tangent-plane resampling because these clouds are not
+    surfaces: 78 % of 13-point neighbourhoods are isotropic blobs and under 1 % are planar.
+    Validated on a 20k subsample -- tetrahedra per point holds at 6.5 from 1x to 10x density.
+* **The tiling** (`--upsample tile`): the cloud is replicated on a k x k x k lattice
   of translated copies, so the point spacing -- and with it the local structure and the
   degeneracies -- is preserved while the extent grows, and the requested number of points is drawn
   from that lattice (1M points = 27 copies). Every record says how many tiles were used and the
