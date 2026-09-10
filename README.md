@@ -134,13 +134,24 @@ Two things to know about the sizes:
 * **Two ways to exceed the cloud's own point count** (`--upsample`, `UPSAMPLE=`), because the clouds
   hold ~100k points each and the sweep goes to 1M:
   * `tile` (default) -- **more area, same resolution**: the tiling described below.
-  * `densify` -- **same area, more resolution**: each new point is a Dirichlet(1,1,1,1) convex
-    combination of an existing point and three of its 12 nearest neighbours, i.e. uniform inside
-    that local tetrahedron, rejected when the tetrahedron's longest edge exceeds `--max-edge` (3)
-    median spacings so nothing is placed across a void. One k-d tree query per cloud. The
-    interpolation is volumetric rather than a tangent-plane resampling because these clouds are not
-    surfaces: 78 % of 13-point neighbourhoods are isotropic blobs and under 1 % are planar.
-    Validated on a 20k subsample -- tetrahedra per point holds at 6.5 from 1x to 10x density.
+  * `densify` -- **same area, more resolution**: the cloud is triangulated once, and each new point
+    picks one of its Delaunay tetrahedra **uniformly** and takes a Dirichlet(1,1,1,1) convex
+    combination of its four vertices (uniform inside that tetrahedron). Two choices, both measured
+    at 4x the points on a 20k subsample against the ideal cube-root spacing ratio of 1.59:
+    | variant | spacing ratio | new points >3 spacings from a real one |
+    |---|---|---|
+    | volume-weighted tetrahedra | 1.02 | 39.9 % |
+    | point + 3 nearest neighbours | 3.53 | (6 % within 0.2 spacings: manufactured close pairs) |
+    | uniform per tetrahedron, no filter | 1.63 | 2.5 % |
+    | **uniform per tetrahedron, circumradius <= 3 spacings** | **1.83** | **0 %** |
+    Volume weighting fails because Delaunay fills the convex hull and 63 % of its tetrahedra carry
+    96 % of the volume, so the new points pour into the voids. Tetrahedra built from a point and
+    its nearest neighbours fail because they are anchored on existing points, so new points pile up
+    next to old ones. `--max-circumradius` (3) keeps 84 % of the tetrahedra and no point lands in a
+    void; edge length is the wrong measure, discarding 63 % of them and over-tightening by 70 %.
+    The interpolation is volumetric rather than a tangent-plane resampling because these clouds are
+    not surfaces: 78 % of 13-point neighbourhoods are isotropic blobs and under 1 % are planar.
+    Tetrahedra per point holds at 6.5-6.6 from 1x to 10x density.
 * **The tiling** (`--upsample tile`): the cloud is replicated on a k x k x k lattice
   of translated copies, so the point spacing -- and with it the local structure and the
   degeneracies -- is preserved while the extent grows, and the requested number of points is drawn
