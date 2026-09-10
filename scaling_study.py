@@ -667,7 +667,30 @@ def fit_exponent(ns, ts) -> tuple[float, float] | None:
     return a, resid
 
 
-def plot(payload: dict, path: str, min_seconds: float = 2e-3) -> list[str]:
+def _upsample_note(runs: list[dict], env: dict) -> str:
+    """How the sizes above the cloud's own point count were produced, for the figure title."""
+    mode = env.get("upsample") or next(
+        (r.get("upsample") for r in runs if r.get("upsample")), None
+    )
+    if mode == "densify":
+        cap = env.get("max_circumradius")
+        return (
+            "beyond the cloud's own size: DENSIFIED -- points interpolated inside its Delaunay "
+            "tetrahedra, same volume, finer spacing"
+            + (f" (circumradius cap {cap:g} spacings)" if cap else "")
+        )
+    tiles = max((r.get("tiles", 1) for r in runs), default=1)
+    if mode == "tile" or tiles > 1:
+        return (
+            "beyond the cloud's own size: TILED -- translated copies on a rectangular lattice "
+            f"(up to {tiles}), same spacing, larger volume"
+        )
+    return "subsamples of the cloud only"
+
+
+def plot(
+    payload: dict, path: str, min_seconds: float = 2e-3, show_alpha: bool = True
+) -> list[str]:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -708,7 +731,7 @@ def plot(payload: dict, path: str, min_seconds: float = 2e-3) -> list[str]:
                 if fit is None and len(small) >= 4:
                     fit = fit_exponent(*zip(*small))
                 label = f"{LABELS[m]}" + (" + jitter" if jit else "")
-                if fit is not None:
+                if fit is not None and show_alpha:
                     label += f"  ($\\alpha$={fit[0]:.2f}$\\pm${100 * fit[1]:.0f}%)"
                 style = {
                     "marker": "o" if not jit else "^",
@@ -739,7 +762,7 @@ def plot(payload: dict, path: str, min_seconds: float = 2e-3) -> list[str]:
                 ax.get_ylim()[0],
                 "  tiled copies of the cloud ->"
                 if mode == "tile"
-                else "  densified (same volume) ->",
+                else "  densified, same volume ->",
                 fontsize=7,
                 rotation=90,
                 va="bottom",
@@ -754,13 +777,28 @@ def plot(payload: dict, path: str, min_seconds: float = 2e-3) -> list[str]:
         ax2.set_title(f"{cloud}: cost per point", fontsize=10)
     axes[0][0].set_ylabel("seconds (mean of the timed runs)")
     axes[1][0].set_ylabel("microseconds per point")
-    axes[0][-1].legend(fontsize=7, loc="upper left", framealpha=0.9)
+    # One legend for the whole figure, below the panels: inside an axes it covers the curves.
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    for a_ in axes.ravel():
+        if a_.get_legend():
+            a_.get_legend().remove()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        ncol=4,
+        fontsize=8,
+        frameon=False,
+        bbox_to_anchor=(0.5, 0.0),
+    )
     fig.suptitle(
         "3D Delaunay: time vs number of points"
-        + (f"   [{payload['_env'].get('gpu')}]" if payload["_env"].get("gpu") else ""),
+        + (f"   [{payload['_env'].get('gpu')}]" if payload["_env"].get("gpu") else "")
+        + "\n"
+        + _upsample_note(runs, payload["_env"]),
         fontsize=11,
     )
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0.11, 1, 0.94))
     fig.savefig(path, dpi=140)
     plt.close(fig)
     print(f"wrote {path}")
@@ -888,10 +926,12 @@ def plot_breakdown(payload: dict, stem: str) -> list[str]:
                 f"   [{payload['_env'].get('gpu')}]"
                 if payload["_env"].get("gpu")
                 else ""
-            ),
+            )
+            + "\n"
+            + _upsample_note(runs, payload["_env"]),
             fontsize=11,
         )
-        fig.tight_layout()
+        fig.tight_layout(rect=(0, 0, 1, 0.95))
         path = f"{stem}_breakdown_{cloud}.png"
         fig.savefig(path, dpi=140)
         plt.close(fig)
@@ -1033,6 +1073,14 @@ def main() -> int:
     ap.add_argument("--csv", default=None, help="also write the records as CSV")
     ap.add_argument("--plot", default=None, help="write the log-log diagram here")
     ap.add_argument(
+        "--no-alpha",
+        action="store_true",
+        help="leave the fitted exponent out of the legend.  Only CGAL's single-threaded insertion "
+        "is an actual power law over this range (alpha 1.00, 2%% residual); for the others a single "
+        "exponent is a line drawn through a curve with a fixed cost at the small-N end, so the "
+        "cost-per-point panel is the honest reading",
+    )
+    ap.add_argument(
         "--resume",
         action="store_true",
         help="keep the measurements already in --json and run only the missing ones; a "
@@ -1082,7 +1130,7 @@ def main() -> int:
     if args.csv:
         write_csv(payload, args.csv)
     if args.plot:
-        plot(payload, args.plot)
+        plot(payload, args.plot, show_alpha=not args.no_alpha)
         plot_breakdown(payload, os.path.splitext(args.plot)[0])
     return 0
 
