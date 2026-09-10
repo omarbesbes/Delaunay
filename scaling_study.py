@@ -390,7 +390,10 @@ def sweep(args) -> dict:
             with open(args.json, "w") as fh:
                 json.dump({"_env": env, "runs": records}, fh, indent=1)
 
-    give_up: set[tuple] = set()  # (cloud, jitter, method) that failed or grew too slow
+    give_up: set[tuple] = (
+        set()
+    )  # (cloud, jitter, method) that grew too slow to keep measuring
+    fails: dict[tuple, int] = {}  # consecutive failures per (cloud, jitter, method)
     for cloud_name, cloud in clouds.items():
         rng = np.random.default_rng(args.seed)
         for n in sizes:
@@ -413,7 +416,8 @@ def sweep(args) -> dict:
                         continue
                     if key in give_up:
                         rec["error"] = (
-                            "skipped (this method already failed or exceeded --skip-above)"
+                            "skipped (this method exceeded --skip-above or failed "
+                            f"{args.give_up_after} times in a row at smaller sizes)"
                         )
                         records.append(rec)
                         save()
@@ -434,6 +438,7 @@ def sweep(args) -> dict:
                             f" -> {rec['seconds']:.3f}s ({rec['runs']} run(s))",
                             flush=True,
                         )
+                        fails[key] = 0
                         if args.skip_above and rec["seconds"] > args.skip_above:
                             give_up.add(key)
                             print(
@@ -444,8 +449,19 @@ def sweep(args) -> dict:
                     except Exception as exc:  # noqa: BLE001 - a failing method must not stop the sweep
                         rec.pop("status", None)
                         rec["error"] = str(exc)[:400]
-                        give_up.add(key)
-                        print(f" -> FAILED: {rec['error'][:160]}", flush=True)
+                        # A crash or a timeout is input-specific -- gDel3D crashes on one 22k
+                        # subsample and is fine at 32k -- so keep going, and give up only after
+                        # several failures in a row.
+                        fails[key] = fails.get(key, 0) + 1
+                        if fails[key] >= args.give_up_after:
+                            give_up.add(key)
+                            print(
+                                f" -> FAILED {fails[key]}x in a row, not measuring it at larger "
+                                f"sizes: {rec['error'][:120]}",
+                                flush=True,
+                            )
+                        else:
+                            print(f" -> FAILED: {rec['error'][:160]}", flush=True)
                     save()
     save()
     return {"_env": env, "runs": records}
@@ -518,10 +534,13 @@ def plot(payload: dict, path: str, min_seconds: float = 2e-3) -> list[str]:
                     continue
                 ns = [r["n"] for r in sel]
                 ts = [r["seconds"] for r in sel]
-                a = fit_exponent(
-                    [n for n, t in zip(ns, ts) if t >= min_seconds],
-                    [t for t in ts if t >= min_seconds],
-                )
+                # Fit the large-N end: below ~100k the times are dominated by fixed costs
+                # (kernel launches, allocations, process spawn), which flattens the slope.
+                big = [(n, t) for n, t in zip(ns, ts) if t >= min_seconds and n >= 1e5]
+                small = [(n, t) for n, t in zip(ns, ts) if t >= min_seconds]
+                a = fit_exponent(*zip(*big)) if len(big) >= 4 else None
+                if a is None and len(small) >= 4:
+                    a = fit_exponent(*zip(*small))
                 label = f"{LABELS[m]}" + (" + jitter" if jit else "")
                 if a is not None:
                     label += f"  ($\\alpha$={a:.2f})"
@@ -785,6 +804,13 @@ def main() -> int:
         "--cgal-bin", default=os.environ.get("CGAL_DELAUNAY_BIN", "bin/cgal_delaunay")
     )
     ap.add_argument("--tool-timeout", type=float, default=120.0)
+    ap.add_argument(
+        "--give-up-after",
+        type=int,
+        default=3,
+        help="stop measuring a method at larger sizes after this many consecutive failures "
+        "(default 3; a single crash or timeout is input-specific, not a size limit)",
+    )
     ap.add_argument(
         "--isolate",
         nargs="*",

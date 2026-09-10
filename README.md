@@ -138,8 +138,9 @@ Two things to know about the sizes:
   from that lattice (1M points = 27 copies). Every record says how many tiles were used and the
   plot marks where tiling starts. A tiled input is a fair scaling load but not the same
   distribution as the real cloud, so read the two regimes separately.
-* A method that fails, times out, or exceeds `--skip-above` (default 60 s) at some size is not
-  measured at larger sizes, and its records say so. That keeps CGAL sequential and Paragram's
+* A method is dropped from larger sizes once it exceeds `--skip-above` (default 60 s), since that
+  is monotone, or after `--give-up-after` (default 3) *consecutive* failures -- a single crash or
+  timeout is input-specific, not a size limit, so the curve continues past it. That keeps CGAL sequential and Paragram's
   global-CGAL repair from consuming the whole job at 1M points.
 * **gDel3D is measured in a separate interpreter with a wall-clock limit** (`--isolate gdel3d
   --measure-timeout 300`), because it has failed in all three ways that cannot be caught in
