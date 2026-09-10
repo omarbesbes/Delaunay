@@ -178,23 +178,56 @@ def densified(
     return np.vstack([cloud, new]), n / len(cloud)
 
 
+def _lattice(copies: int, limit: int = 64) -> tuple[int, int, int]:
+    """The most cube-like (kx, ky, kz) whose product is the smallest one >= `copies`.
+
+    A cubic lattice can only supply 1, 8 or 27 copies, which makes the tiled density sawtooth:
+    drawing 200k points from 8 copies of a 100k cloud leaves each copy at 25% of its original
+    density, and 800k needs 27 copies (8 x 99990 = 799920 < 800000) so the density drops from 88%
+    at 700k to 30%.  Rectangular lattices offer every product, so the density stays as close to
+    100% as the arithmetic allows."""
+    best = None
+    for kx in range(1, limit + 1):
+        for ky in range(kx, limit + 1):
+            if kx * ky > copies * 2:
+                break
+            kz = max(1, -(-copies // (kx * ky)))  # ceil
+            prod = kx * ky * kz
+            score = (prod, max(kx, ky, kz) - min(kx, ky, kz))
+            if prod >= copies and (best is None or score < best[0]):
+                best = (score, (kx, ky, kz))
+    return best[1] if best else (1, 1, 1)
+
+
 def points_at(
     cloud: np.ndarray, n: int, rng: np.random.Generator
 ) -> tuple[np.ndarray, int]:
-    """n points from the cloud: a random subsample, or a tiling of it when n exceeds its size."""
+    """n points from the cloud: a random subsample, or a tiling of it when n exceeds its size.
+
+    The copies are translated, not scaled, so the point spacing -- and with it the local structure
+    and the degeneracies -- is preserved, while the extent grows.  The lattice is rectangular and
+    as small as possible so that the requested n uses nearly all of the points it provides; a cubic
+    lattice would leave each copy at 25-88% of its original density depending on where n falls
+    between 1, 8 and 27 copies."""
     if n <= len(cloud):
         return cloud[rng.choice(len(cloud), n, replace=False)], 1
-    k = math.ceil((n / len(cloud)) ** (1 / 3))
+    counts = sorted(_lattice(-(-n // len(cloud))), reverse=True)
     extent = np.ptp(cloud, axis=0)
+    # Most copies along the cloud's thinnest axis, so the tiled domain stays as compact as
+    # possible: these clouds are slabs (0.89 x 1.00 x 0.13), and stacking 11 copies along z gives
+    # 0.89 x 1.00 x 1.47 rather than an 11-long corridor.
+    order = np.argsort(extent)
+    k = np.empty(3, dtype=int)
+    k[order] = counts
     gap = extent / np.cbrt(len(cloud))  # about one point spacing, so tiles do not touch
     copies = [
         cloud + np.array([i, j, m]) * (extent + gap)
-        for i in range(k)
-        for j in range(k)
-        for m in range(k)
+        for i in range(k[0])
+        for j in range(k[1])
+        for m in range(k[2])
     ]
     big = np.concatenate(copies)
-    return big[rng.choice(len(big), n, replace=False)], k**3
+    return big[rng.choice(len(big), n, replace=False)], int(k.prod())
 
 
 def jittered(points: np.ndarray, jitter: float, seed: int) -> np.ndarray:
