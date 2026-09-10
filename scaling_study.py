@@ -82,6 +82,78 @@ def parse_sizes(specs: list[str]) -> list[int]:
     return sorted(out)
 
 
+_KNN_CACHE: dict[int, tuple[np.ndarray, float]] = {}
+
+
+def _neighbours(cloud: np.ndarray, k: int) -> tuple[np.ndarray, float]:
+    """(indices of each point's k nearest neighbours, median nearest-neighbour distance).
+
+    One k-d tree query per cloud, reused for every size in the sweep."""
+    key = (id(cloud), k)
+    if key not in _KNN_CACHE:
+        from scipy.spatial import cKDTree
+
+        d, idx = cKDTree(cloud).query(cloud, k=k + 1)  # column 0 is the point itself
+        _KNN_CACHE[key] = (idx, float(np.median(d[:, 1])))
+    return _KNN_CACHE[key]
+
+
+def densified(
+    cloud: np.ndarray,
+    n: int,
+    rng: np.random.Generator,
+    k: int = 12,
+    max_edge: float = 3.0,
+) -> tuple[np.ndarray, float]:
+    """n points in the SAME volume: the cloud plus new points interpolated inside local tetrahedra.
+
+    "More resolution" rather than "more area".  Each new point takes one existing point, three of
+    its k nearest neighbours, and a Dirichlet(1,1,1,1) convex combination of the four, which is
+    uniform inside that tetrahedron.  Since there is one such neighbourhood per existing point and
+    they are drawn uniformly, the cloud's own density distribution is reproduced.  Tetrahedra whose
+    longest edge exceeds `max_edge` times the median point spacing are rejected, so no point is
+    placed across a void.
+
+    These clouds are locally three-dimensional (78% of 13-point neighbourhoods are isotropic, under
+    1% planar), which is why the interpolation is volumetric rather than a surface/tangent-plane
+    resampling."""
+    if n <= len(cloud):
+        return cloud[rng.choice(len(cloud), n, replace=False)], 1.0
+    idx, spacing = _neighbours(cloud, k)
+    parts: list[np.ndarray] = []
+    got, tries = 0, 0
+    while got < n - len(cloud) and tries < 50:
+        need = n - len(cloud) - got
+        src = rng.integers(0, len(cloud), need)
+        pick = (
+            np.argsort(rng.random((need, k)), axis=1)[:, :3] + 1
+        )  # 3 distinct neighbours
+        quad = np.column_stack(
+            [
+                idx[src, 0],
+                idx[src, pick[:, 0]],
+                idx[src, pick[:, 1]],
+                idx[src, pick[:, 2]],
+            ]
+        )
+        P = cloud[quad]
+        longest = np.max(
+            [
+                np.linalg.norm(P[:, i] - P[:, j], axis=1)
+                for i in range(4)
+                for j in range(i + 1, 4)
+            ],
+            axis=0,
+        )
+        keep = longest <= max_edge * spacing
+        if keep.any():
+            w = rng.dirichlet((1, 1, 1, 1), int(keep.sum()))
+            parts.append(np.einsum("mk,mkj->mj", w, P[keep]))
+            got += int(keep.sum())
+        tries += 1
+    return np.vstack([cloud, *parts])[:n], n / len(cloud)
+
+
 def points_at(
     cloud: np.ndarray, n: int, rng: np.random.Generator
 ) -> tuple[np.ndarray, int]:
@@ -374,6 +446,9 @@ def sweep(args) -> dict:
         "gstar4d_grid": args.gstar4d_grid,
         "tool_timeout": args.tool_timeout,
         "clouds": {k: len(v) for k, v in clouds.items()},
+        "upsample": args.upsample,
+        "knn": args.knn,
+        "max_edge": args.max_edge,
         "argv": sys.argv[1:],
     }
     if args.device == "cuda":
@@ -397,18 +472,29 @@ def sweep(args) -> dict:
     for cloud_name, cloud in clouds.items():
         rng = np.random.default_rng(args.seed)
         for n in sizes:
-            base, tiles = points_at(cloud, n, rng)
+            if args.upsample == "densify":
+                base, factor = densified(
+                    cloud, n, rng, k=args.knn, max_edge=args.max_edge
+                )
+                tiles = 1
+            else:
+                base, tiles = points_at(cloud, n, rng)
+                factor = len(base) / len(cloud)
             for jit in args.jitter:
                 pts = jittered(base, jit, args.seed)
-                tag = f"{cloud_name} n={n} jitter={jit:g}" + (
-                    f" ({tiles} tiles)" if tiles > 1 else ""
-                )
+                tag = f"{cloud_name} n={n} jitter={jit:g}"
+                if tiles > 1:
+                    tag += f" ({tiles} tiles)"
+                elif factor > 1:
+                    tag += f" (densified x{factor:.1f})"
                 for m in args.methods:
                     key = (cloud_name, jit, m)
                     rec = {
                         "cloud": cloud_name,
                         "n": n,
                         "tiles": tiles,
+                        "upsample": args.upsample,
+                        "density_factor": round(factor, 3),
                         "jitter": jit,
                         "method": m,
                     }
@@ -569,14 +655,24 @@ def plot(payload: dict, path: str, min_seconds: float = 2e-3) -> list[str]:
                 # Cost per point: the rise on the left is the fixed overhead, the plateau on the
                 # right is the marginal cost -- both read directly, with no model assumed.
                 ax2.plot(ns, [1e6 * t / n for n, t in zip(ns, ts)], **style)
-        tiled = [r["n"] for r in runs if r["cloud"] == cloud and r.get("tiles", 1) > 1]
-        if tiled:
+        synth = [
+            r["n"]
+            for r in runs
+            if r["cloud"] == cloud
+            and (r.get("tiles", 1) > 1 or r.get("density_factor", 1) > 1)
+        ]
+        if synth:
+            mode = next(
+                (r.get("upsample", "tile") for r in runs if r["cloud"] == cloud), "tile"
+            )
             for a_ in (ax, ax2):
-                a_.axvline(min(tiled), color="k", lw=0.8, ls=":", alpha=0.6)
+                a_.axvline(min(synth), color="k", lw=0.8, ls=":", alpha=0.6)
             ax.text(
-                min(tiled),
+                min(synth),
                 ax.get_ylim()[0],
-                "  tiled copies of the cloud ->",
+                "  tiled copies of the cloud ->"
+                if mode == "tile"
+                else "  densified (same volume) ->",
                 fontsize=7,
                 rotation=90,
                 va="bottom",
@@ -846,6 +942,28 @@ def main() -> int:
     ap.add_argument("--child", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--child-npy", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--child-out", default=None, help=argparse.SUPPRESS)
+    ap.add_argument(
+        "--upsample",
+        choices=["tile", "densify"],
+        default="tile",
+        help="how to reach sizes above the cloud's own point count: 'tile' replicates the cloud on "
+        "a k x k x k lattice of translated copies (more area, same resolution), 'densify' "
+        "interpolates new points inside local tetrahedra of k nearest neighbours (same area, more "
+        "resolution).  Default tile.",
+    )
+    ap.add_argument(
+        "--knn",
+        type=int,
+        default=12,
+        help="neighbours per local neighbourhood for --upsample densify (default 12)",
+    )
+    ap.add_argument(
+        "--max-edge",
+        type=float,
+        default=3.0,
+        help="reject a densify tetrahedron whose longest edge exceeds this many median point "
+        "spacings, so no point is placed across a void (default 3)",
+    )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--json", default="results/scaling.json")
     ap.add_argument("--csv", default=None, help="also write the records as CSV")
