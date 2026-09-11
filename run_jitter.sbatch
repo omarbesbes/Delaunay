@@ -20,8 +20,13 @@
 # The predicate counters need the patched builds.  The job checks for them and repairs what it can:
 # it rebuilds bin/cgal_delaunay_profile if missing, and re-patches and reinstalls pyGDel3D if its
 # gDel3D counters are absent (AUTOFIX=0 to only report).
+# First executable line, before anything that can fail: if this does not reach the .o file, the
+# script never ran and the cause is at the SLURM level (prolog, GPU allocation, node failure),
+# not in here.  `sacct -j <jobid>` has the state and the reason in that case.
+echo "run_jitter: bash started on $(hostname -s) at $(date '+%F %T'), job ${SLURM_JOB_ID:-?}"
+
 set -euo pipefail
-cd "$SLURM_SUBMIT_DIR"
+cd "${SLURM_SUBMIT_DIR:?submit directory not set: submit with sbatch, from the repository root}"
 set +u; module purge; module load anaconda3/2023.09-0/none-none; set -u
 ENV=${DELAUNAY_ENV:-$WORKDIR/envs/delaunay}
 export NVCC_PREPEND_FLAGS="${NVCC_PREPEND_FLAGS:-}" NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:-}"
