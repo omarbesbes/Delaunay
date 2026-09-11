@@ -57,6 +57,19 @@ else
   echo "-- bin/cgal_delaunay present"
 fi
 
+# Same tool with CGAL's own predicate profiling switched on.  CGAL_PROFILE makes every filtered
+# predicate count its calls and the calls its floating-point filter could not decide (the ones that
+# fall back to exact arithmetic), and dump the totals to stderr at exit.  That costs time, so it is
+# a separate binary: timings come from bin/cgal_delaunay, counts from this one.
+if [ "$FORCE" = "--force" ] || [ ! -x bin/cgal_delaunay_profile ]; then
+  echo "-- building bin/cgal_delaunay_profile (CGAL parallel, TBB, CGAL_PROFILE)"
+  $CXX -O3 -std=c++17 -pthread -DCGAL_LINKED_WITH_TBB -DCGAL_PROFILE -I"$CONDA_PREFIX/include" cgal_delaunay.cpp \
+    -o bin/cgal_delaunay_profile -L"$CONDA_PREFIX/lib" -Wl,-rpath,"$CONDA_PREFIX/lib" \
+    -ltbb -ltbbmalloc -lgmp -lmpfr -lpthread
+else
+  echo "-- bin/cgal_delaunay_profile present"
+fi
+
 if [ "$FORCE" = "--force" ] || [ ! -x bin/dewall ]; then
   echo "-- building bin/dewall (Local DeWall, archs $GS_ARCHS)"
   [ -d third_party/Local-DeWall ] || git clone -q https://github.com/WuhengGao/Local-DeWall.git third_party/Local-DeWall
@@ -85,6 +98,6 @@ else
 fi
 
 echo "-- tools:"
-for b in bin/cgal_delaunay bin/dewall bin/gstar4d; do
+for b in bin/cgal_delaunay bin/cgal_delaunay_profile bin/dewall bin/gstar4d; do
   printf '   %-20s %s\n' "$b" "$([ -x "$b" ] && echo OK || echo MISSING)"
 done

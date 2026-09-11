@@ -30,6 +30,13 @@ Caveats
     tetrahedra of the convex hull whose circumcentre is far outside the box can be
     missing.  Cells with a non-zero `status` are unreliable as well.
 
+The in-sphere test of step 4 is the analogue of a filtered predicate: it is evaluated in
+float64 and compared against a Shewchuk-style rounding-error bound, so a determinant smaller
+than the bound is *undecidable in double precision* -- an exact predicate would have to take
+over there (this module has no exact fallback; such a 4-clique is kept and reported).
+`last_insphere_stats()` returns the counts of the last conversion, which is how this method
+enters the exact-vs-filtered comparison against gDel3D and CGAL.
+
 Usage
     import paragram
     from voronoi_to_delaunay import delaunay_from_diagram
@@ -55,7 +62,22 @@ __all__ = [
     "adjacency_from_tets",
     "delaunay_from_adjacency",
     "delaunay_from_diagram",
+    "last_insphere_stats",
 ]
+
+_LAST_INSPHERE: dict[str, float | int] = {}
+
+
+def last_insphere_stats() -> dict[str, float | int]:
+    """Counters of the last `delaunay_from_adjacency` call:
+
+        cliques    4-cliques of the adjacency graph that reached the in-sphere test
+        tests      in-sphere determinants evaluated (one per clique per candidate 5th point)
+        uncertain  of those, how many landed inside the float64 rounding-error bound, i.e.
+                   could not be decided in double precision
+        cospherical_tets  tetrahedra kept although a 5th point sits on their circumsphere
+    """
+    return dict(_LAST_INSPHERE)
 
 
 # ----------------------------------------------------------------------------------------
@@ -168,6 +190,7 @@ def delaunay_from_adjacency(
     """
     dev = points.device
     n = points.shape[0]
+    _LAST_INSPHERE.clear()
     if n < 4:
         return torch.empty(0, 4, dtype=torch.long, device=dev), (
             torch.empty(0, 3, dtype=torch.float64, device=dev) if return_circumcentres else None
@@ -208,6 +231,10 @@ def delaunay_from_adjacency(
     check_k = 4 if check_all_cells else 1
     tet_parts = []
     n_degenerate = 0
+    # Predicate counters.  `n_tests` is free (it is a tensor *shape*); `n_uncertain` is
+    # accumulated on the device and read once at the end, so no chunk forces a sync.
+    n_cliques = n_tests = 0
+    n_uncertain = torch.zeros((), dtype=torch.long, device=dev)
 
     def triangles(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         """a<b<c with ab, ac, bc edges (c drawn from the neighbours of a)."""
@@ -233,7 +260,8 @@ def delaunay_from_adjacency(
         Exact criterion (see module docstring); decided with the insphere determinant, which
         needs no division and is far better conditioned than testing distances against a
         computed circumcentre (slivers!)."""
-        nonlocal n_degenerate
+        nonlocal n_degenerate, n_cliques, n_tests
+        n_cliques += t.shape[0]
         pa, pb, pc, pd = p[t[:, 0]], p[t[:, 1]], p[t[:, 2]], p[t[:, 3]]
         B, C, D = pb - pa, pc - pa, pd - pa
         orient = _det3(B, C, D)  # 6 * signed volume
@@ -247,6 +275,7 @@ def delaunay_from_adjacency(
             ridx, nb = ridx[~own], nb[~own]
             if ridx.numel() == 0:
                 continue
+            n_tests += ridx.numel()
             pe = p[nb]
             A_, B_, C_, D_ = pa[ridx] - pe, pb[ridx] - pe, pc[ridx] - pe, pd[ridx] - pe
             del pe
@@ -267,9 +296,13 @@ def delaunay_from_adjacency(
             killed = torch.zeros(t.shape[0], dtype=torch.bool, device=dev)
             killed[ridx[inside]] = True
             keep &= ~killed
+            # Determinants inside the rounding-error bound: undecidable in float64.  An exact
+            # predicate would decide them; here they are counted and the clique is kept.
+            undecided = insphere.abs() <= rel_tol * bound
+            n_uncertain.add_(undecided.sum())
             if k == 0:
                 # a 5th point *on* the circumsphere: co-spherical group, triangulation not unique
-                cosph[ridx[insphere.abs() <= rel_tol * bound]] = True
+                cosph[ridx[undecided]] = True
         n_degenerate += int((keep & cosph).sum())
         return t[keep]
 
@@ -283,6 +316,15 @@ def delaunay_from_adjacency(
                 tet_parts.append(empty_sphere(k4[s3:e3]))
             del k4
         del tris
+
+    _LAST_INSPHERE.clear()
+    _LAST_INSPHERE.update(
+        cliques=n_cliques,
+        tests=n_tests,
+        uncertain=int(n_uncertain),
+        cospherical_tets=n_degenerate,
+        rel_tol=rel_tol,
+    )
 
     if n_degenerate:
         warnings.warn(

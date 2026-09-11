@@ -52,6 +52,7 @@ import argparse
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -583,6 +584,37 @@ def _cgal_subprocess(points: np.ndarray, python: str) -> np.ndarray:
         return np.load(pout)
 
 
+def _cgal_profile_counters(stderr: str) -> dict:
+    """Read CGAL's own predicate counters out of a `-DCGAL_PROFILE` build's stderr.
+
+    Every CGAL filtered predicate evaluates an interval-arithmetic version first and falls back to
+    exact arithmetic only when the interval straddles zero.  Under CGAL_PROFILE each one counts
+    both, and a static destructor dumps them at exit as
+
+        [CGAL::Profile_counter]     123456 calls to    : ...Side_of_oriented_sphere_3...
+        [CGAL::Profile_counter]         42 failures of : ...Side_of_oriented_sphere_3...
+
+    "failures" means the filter could not decide, i.e. exactly the exact-arithmetic fallbacks.
+    Returned as totals over all predicates plus the in-sphere predicate on its own, which is the
+    one comparable with gDel3D's counters.  A binary built without CGAL_PROFILE prints none of
+    this and the result is empty, so callers see no counters rather than zeros."""
+    out: dict[str, int] = {}
+    for m in re.finditer(r"\[CGAL::Profile_counter\]\s+(\d+)\s+(.*)", stderr or ""):
+        count, what = int(m.group(1)), m.group(2)
+        if "calls to" in what:
+            kind = "calls"
+        elif "failures of" in what:
+            kind = "failures"
+        else:
+            continue
+        out[f"predicate_{kind}"] = out.get(f"predicate_{kind}", 0) + count
+        if "side_of_oriented_sphere" in what.lower():
+            out[f"insphere_{kind}"] = out.get(f"insphere_{kind}", 0) + count
+        elif "orientation_3" in what.lower():
+            out[f"orientation_{kind}"] = out.get(f"orientation_{kind}", 0) + count
+    return out
+
+
 def _cgal_binary(points: np.ndarray, binary: str) -> tuple[np.ndarray, str, dict]:
     """Reference via the compiled `cgal_delaunay` tool (CGAL Parallel_tag + TBB, see
     cgal_delaunay.cpp).  Points/tets are exchanged as raw binary files; the tool reports its own
@@ -607,6 +639,7 @@ def _cgal_binary(points: np.ndarray, binary: str) -> tuple[np.ndarray, str, dict
                 info[k] = float(v) if "." in v else int(v)
             except ValueError:
                 info[k] = v
+    info.update(_cgal_profile_counters(r.stderr))
     info["io_seconds"] = max(
         0.0, wall - (info.get("build_seconds", 0.0) + info.get("extract_seconds", 0.0))
     )
@@ -764,8 +797,20 @@ def run_gdel3d(points: np.ndarray) -> tuple[np.ndarray, float, dict]:
     if hasattr(
         out, "get_stats"
     ):  # phase timers (ms): GPU init/split/flip/relocate/sort, CPU splaying
-        st = {k: float(v) for k, v in dict(out.get_stats()).items()}
+        # timers are milliseconds; the *Num fields are counts and must stay integral
+        st = {
+            k: (int(v) if k.endswith("Num") else float(v))
+            for k, v in dict(out.get_stats()).items()
+        }
         info["stats_ms"] = st
+        # Filtered vs exact in-sphere evaluations (patch_pygdel3d.py adds these three; an
+        # unpatched build simply has none of them).  Every exact evaluation is a filtered one
+        # the filter could not decide, so predCheckNum is the total and exactCheckNum a subset
+        # of it -- not something to add on top.
+        if "predCheckNum" in st:
+            info["predicate_total"] = st["predCheckNum"]
+            info["predicate_exact"] = st["exactCheckNum"]
+            info["predicate_exact_tets"] = st["exactTetNum"]
         info["self_reported_total_seconds"] = st.get("totalTime", float("nan")) / 1000.0
         # This build only fills totalTime; the per-phase fields can hold uninitialised values
         # (e.g. initTime = 9.4e4 ms for a 0.4 s run), so accept a phase only if it is consistent

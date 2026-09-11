@@ -184,6 +184,50 @@ Two things to know about the sizes:
   running into it again. To rebuild the diagram from whatever finished:
   `python scaling_study.py --plot-only results/scaling-<jobid>/scaling-*.json --plot mine.png`.
 
+## Jitter study: what the perturbation costs and buys
+
+The benchmark perturbs the LiDAR clouds because their points sit on a sensor grid, which makes
+large groups of them exactly co-spherical: the Delaunay triangulation is then not unique and
+several methods return overlapping tetrahedra or fail outright. `jitter_study.py` sweeps the size
+of that perturbation on the two point clouds only, and records, for every value:
+
+* **how much it deforms the cloud** — displacement in absolute terms and as a fraction of the local
+  point spacing, convex-hull volume change, points whose nearest neighbour changed, exact
+  duplicates removed, and what happened to the reference triangulation (tetrahedra, slivers, flat
+  tetrahedra);
+* **what each method costs** — seconds, and its tetrahedra against a CGAL reference on the same
+  perturbed points;
+* **how often the in-sphere predicate falls back to exact arithmetic.** A robust implementation
+  evaluates the test in floating point with an error bound and redoes it exactly only when the
+  bound says the sign is not trustworthy. Degeneracy is exactly what makes that filter fail, so
+  this is the number that says whether a jitter removed the degeneracy or only hid it.
+
+| method | counter | how |
+|---|---|---|
+| gDel3D | `doInSphereFast` vs `doInSphereSoS` | `patch_pygdel3d.py` adds three slots to `_counterVec` and to `Statistics`, read once per flipping loop (one register increment per test, one atomic per block) |
+| CGAL | filtered-predicate calls vs filter failures | `-DCGAL_PROFILE` build `bin/cgal_delaunay_profile`, run untimed and single-threaded so the counts are reproducible |
+| Paragram + conversion | in-sphere determinants inside the float64 rounding-error bound | `voronoi_to_delaunay.last_insphere_stats()`; there is no exact fallback, so these are tests it cannot decide at all |
+| GeoDel | — | would need a `PCK_STATS` build of Geogram, which the wheel is not built with |
+| Local DeWall, gStar4D | — | no exact fallback to count |
+
+```bash
+sbatch run_jitter.sbatch                                     # 0, 1e-9 .. 1e-3 on both clouds
+JITTERS="0 1e-8 1e-6 1e-4" REPEATS=1 sbatch run_jitter.sbatch
+CLOUD=data/voronoi_jax_068.ply sbatch run_jitter.sbatch
+python jitter_study.py --plot-only results/jitter-<jobid>/jitter.json \
+    --markdown mine.md --plot mine.png
+```
+
+Outputs, in `results/jitter-<jobid>/`: `jitter.md` (report-ready tables), `jitter.png` (three rows
+per cloud: time, exact-predicate share, deformation), `jitter.csv`, `jitter.json`. One process per
+method, all sharing one JSON, so a library that crashes the interpreter only ends its own sweep and
+`--resume` carries on; the deformation metrics and CGAL's counters are computed by the first
+process and read back by the rest.
+
+The predicate counters need the patched builds: `bash setup_ruche.sh` (pyGDel3D) and
+`bash build_tools.sh` (`bin/cgal_delaunay_profile`). Without them the study still runs and simply
+reports no counters for those methods.
+
 ## Troubleshooting (observed on Ruche)
 
 | symptom | cause | fix |
@@ -225,13 +269,16 @@ extension cache; the job does a warm-up call before timing.
 - `make_report.py` — Markdown report + charts from one or several JSON files.
 - `scaling_study.py`, `run_scaling.sbatch` — time vs number of points (2k .. 1M) for the two point
   clouds, with and without jitter; log-log diagram with fitted exponents, plus CSV.
+- `jitter_study.py`, `run_jitter.sbatch` — sweep the jitter on the two point clouds: deformation,
+  per-method time and correctness, and exact vs filtered predicate counts.
 - `cuda_wait.sh` — waits for a usable CUDA context, and resubmits the job excluding the node when
   one never appears (some Ruche GPU nodes accept a job and then refuse every context).
 - `check_gstar4d.py` — smoke-test gStar4D alone: its own generator, then random clouds, then
   subsamples of the PLY clouds, to separate a broken build from an input it cannot handle.
 - `voronoi_to_delaunay.py` — Voronoi adjacency → Delaunay tetrahedra (torch, GPU or CPU).
 - `paragram_repair.py` — exact CPU fallback for Paragram's failed / hull cells.
-- `cgal_delaunay.cpp` — parallel CGAL Delaunay command-line tool.
+- `cgal_delaunay.cpp` — parallel CGAL Delaunay command-line tool; `build_tools.sh` also
+  builds it with `-DCGAL_PROFILE` as `bin/cgal_delaunay_profile` for the predicate counts.
 - `patch_paragram.py`, `patch_pygdel3d.py`, `patch_dewall.py`, `patch_gstar4d.py` — source patches applied
   to the upstream repositories at setup time (documented at the top of each file).
 - `setup_ruche.sh`, `run_ruche.sbatch` — cluster setup and SLURM job.

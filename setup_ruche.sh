@@ -86,7 +86,7 @@ pip install -q $PIP_FORCE --no-deps third_party/paragram
 python -c "import paragram, inspect; print('paragram import OK; bbox_pad:', 'bbox_pad' in inspect.signature(paragram.voronoi_diagram).parameters)"
 echo "   (Paragram's CUDA extension is JIT-compiled at first use, inside the SLURM job on the GPU node)"
 
-echo "== [5/7] pyGDel3D (patched: dead-tet flags, phase timers, TORCH_CUDA_ARCH_LIST)"
+echo "== [5/7] pyGDel3D (patched: dead-tet flags, phase timers, predicate counters, TORCH_CUDA_ARCH_LIST)"
 [ -d third_party/pyGDel3D ] || git clone -q https://github.com/half-potato/pyGDel3D.git third_party/pyGDel3D
 python patch_pygdel3d.py third_party/pyGDel3D
 pip install -q $PIP_FORCE --no-build-isolation --no-deps third_party/pyGDel3D
