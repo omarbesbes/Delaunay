@@ -17,8 +17,9 @@
 #         METHODS="gdel3d cgal_sequential" sbatch run_jitter.sbatch
 #         REPEATS=1 sbatch run_jitter.sbatch                            (quick pass)
 #
-# The predicate counters need the patched builds:  bash setup_ruche.sh  (pyGDel3D, for gDel3D's
-# doInSphereFast/doInSphereSoS counts) and  bash build_tools.sh  (bin/cgal_delaunay_profile).
+# The predicate counters need the patched builds.  The job checks for them and repairs what it can:
+# it rebuilds bin/cgal_delaunay_profile if missing, and re-patches and reinstalls pyGDel3D if its
+# gDel3D counters are absent (AUTOFIX=0 to only report).
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 set +u; module purge; module load anaconda3/2023.09-0/none-none; set -u
@@ -63,16 +64,33 @@ GSTAR4D_GRID=${GSTAR4D_GRID:-512}
 # no predicate counters.  Cheap to build, so do it here if it is missing.
 [ -x bin/cgal_delaunay_profile ] || bash build_tools.sh
 
-echo "== predicate counters available:"
+# gDel3D's counters live in its Statistics struct, so a pyGDel3D built before patch_pygdel3d.py
+# grew them still has get_stats() -- the missing keys only show up at run time.  Check by running
+# it, and rebuild rather than discover after an eight-hour sweep that half the study is empty.
+echo "== predicate counters"
+probe() {
+  python - 2>/dev/null <<'PY' | grep -c "GDEL3D_COUNTERS yes" || true
+import numpy as np
+import test_delaunay_surfaces as T
+_, _, info = T.run_gdel3d(np.random.default_rng(0).random((1000, 3)))
+print("GDEL3D_COUNTERS", "yes" if info.get("predicate_total") else "no")
+PY
+}
+if [ "$(probe)" = "1" ]; then
+  echo "   gDel3D  : yes"
+elif [ "${AUTOFIX:-1}" = "1" ]; then
+  echo "   gDel3D  : missing -- re-patching and rebuilding pyGDel3D (a few minutes)"
+  python patch_pygdel3d.py third_party/pyGDel3D
+  pip install -q --force-reinstall --no-build-isolation --no-deps third_party/pyGDel3D
+  echo "   gDel3D  : $([ "$(probe)" = "1" ] && echo yes || echo "STILL MISSING -- continuing without them")"
+else
+  echo "   gDel3D  : missing (AUTOFIX=0; run 'python patch_pygdel3d.py third_party/pyGDel3D' and reinstall it)"
+fi
 python - <<'PY'
 import os
 
-import gdel3d
 import voronoi_to_delaunay as v
 
-# gDel3D's counters live in its Statistics struct, so a build patched before patch_pygdel3d.py
-# grew them has get_stats() but no predCheckNum key; that only shows up at run time.
-print("   gDel3D  :", "get_stats" if hasattr(gdel3d.DelOutput, "get_stats") else "NO (re-run setup_ruche.sh)")
 print("   CGAL    :", "yes" if os.path.exists("bin/cgal_delaunay_profile") else "NO (run build_tools.sh)")
 print("   Paragram:", "yes" if hasattr(v, "last_insphere_stats") else "NO")
 PY
