@@ -82,27 +82,64 @@ acquires a different nearest neighbour.
 
 ### What it does to the triangulation is a different question
 
-| jitter | tetrahedra | slivers (radius ratio < 0.05) | flat tetrahedra | smallest tetrahedron volume |
-|---|---|---|---|---|
-| 0 | 660 465 | 9 788 | 27 | 7.3e-17 |
-| 1e-9 | 669 016 | 18 339 | 716 | **1.4e-23** |
-| 1e-8 | 669 122 | 18 439 | 125 | 6.3e-21 |
-| 1e-7 | 669 063 | 18 370 | 68 | 1.8e-18 |
-| 1e-6 | 669 051 | 18 371 | 44 | 1.4e-16 |
-| 1e-5 | 669 059 | 18 318 | **0** | 1.1e-14 |
-| 1e-4 | 668 922 | 18 059 | 0 | 5.5e-13 |
+Two different properties have to be kept apart here, because the benchmark's `degenerate_tets`
+metric measures only the second one despite its name:
 
-This is the counter-intuitive part and it is worth being explicit about. **A very small jitter does
-not remove degeneracy; it converts exact ties into near-ties, which are numerically worse.** At
-jitter 0 the co-spherical groups produce 27 flat tetrahedra and a smallest volume of 7e-17. At
-1e-9 there are 716 flat tetrahedra and the smallest is 1.4e-23 — six orders of magnitude thinner.
-Only from 1e-5 does the triangulation become genuinely non-degenerate.
+* **exact degeneracy** — four points exactly coplanar (or five exactly co-spherical), so the
+  predicate returns exactly zero and the triangulation is ambiguous. Measured directly by CGAL's
+  exact-arithmetic fallbacks.
+* **near-flatness** — a tetrahedron with strictly positive but tiny volume. `degenerate_tets` counts
+  `vol <= 1e-14 x bbox^3`, i.e. volume below a *tolerance*, never volume equal to zero.
 
-The tetrahedron count jumps 1.3 % between jitter 0 and any jitter, and the sliver count nearly
-doubles (9 788 → 18 339). Both are the expected signature of co-spherical groups being resolved:
-a group of *k* points on one sphere admits many triangulations, and perturbing it commits to one,
-which generally has more and thinner tetrahedra than the degenerate configuration reported at
-jitter 0.
+| jitter | tetrahedra | slivers (rr < 0.05) | near-flat (vol ≤ 1e-14) | smallest volume | CGAL orientation fallbacks |
+|---|---|---|---|---|---|
+| 0 | 660 465 | 9 788 | 27 | 7.3e-17 | **16** |
+| 1e-9 | 669 016 | 18 339 | **716** | **1.4e-23** | 0 |
+| 1e-8 | 669 122 | 18 439 | 125 | 6.3e-21 | 0 |
+| 1e-7 | 669 063 | 18 370 | 68 | 1.8e-18 | 0 |
+| 1e-6 | 669 051 | 18 371 | 44 | 1.4e-16 | 0 |
+| 1e-5 | 669 059 | 18 318 | **0** | 1.1e-14 | 0 |
+| 1e-4 | 668 922 | 18 059 | 0 | 5.5e-13 | 0 |
+
+**Jitter removes exact degeneracy immediately and completely** — the rightmost column goes from 16
+(26 on `jax`) to zero at 1e-9 and stays there. After any perturbation the points are in general
+position: every tetrahedron has strictly positive volume, and no predicate returns zero. That is
+what general position means, and the measurement confirms it.
+
+**What it does not do is make the geometry well-conditioned**, and for a while it makes it worse:
+27 near-flat tetrahedra at jitter 0 become 716 at 1e-9, and the thinnest tetrahedron goes from
+7.3e-17 to 1.4e-23. These are not degenerate — they are ordinary tetrahedra that happen to be
+extremely thin. Only from 1e-5 does the triangulation become genuinely well-shaped.
+
+The mechanism is visible in what the jitter *adds*:
+
+| jitter | tetrahedra added | slivers added | difference |
+|---|---|---|---|
+| 1e-9 | 8 551 | 8 551 | **0** |
+| 1e-8 | 8 657 | 8 651 | 6 |
+| 1e-7 | 8 598 | 8 582 | 16 |
+| 1e-6 | 8 586 | 8 583 | 3 |
+| 1e-3 | 7 397 | 2 295 | 5 102 |
+
+Every tetrahedron a small jitter adds is a sliver (on `jax`: 23 129 added, 23 130 slivers). These
+clouds are height fields on a raster grid, so roofs, ground and walls are large exactly-coplanar
+regions. At jitter 0 four coplanar points span a tetrahedron of exactly zero volume, the orientation
+predicate returns zero, and CGAL resolves the configuration combinatorially rather than filling a
+plane with tetrahedra. Lift those points by sigma and they are in general position: there is nothing
+left to detect, so the region is filled with real tetrahedra of base ~ the point spacing (0.003) and
+height ~ sigma. At sigma = 1e-9 that is an aspect ratio of 3e-7 — the thinnest objects in the mesh.
+
+The 1.4e-23 minimum is an extreme-value effect rather than a degeneracy: the height of the fourth
+vertex above the plane of the other three is roughly Gaussian with scale sigma, so across ~670 000
+tetrahedra the smallest height is around sigma/N. At jitter 0 there is no such continuum to draw
+from — volumes are either at the tolerance floor or of normal size.
+
+At 1e-3 the pattern reverses (only 2 295 of 7 397 added tetrahedra are slivers): a displacement of
+half the point spacing makes the formerly flat regions genuinely three-dimensional.
+
+The practical consequence: for *this* benchmark, which measures whether implementations agree, only
+the first property matters, and 1e-9 already suffices. For a mesh intended for simulation, where
+slivers are the enemy, the second property is the one that matters and the threshold is 1e-5.
 
 ---
 
@@ -220,11 +257,11 @@ margin on either side.**
 
 Two caveats worth carrying into the report:
 
-1. **1e-6 does not produce a non-degenerate triangulation** — 44 flat tetrahedra remain, and the
-   thinnest tetrahedron is 1.4e-16 in volume. It removes the *exact* ties that break the
-   algorithms, not the near-ties. If the goal were well-conditioned tetrahedra rather than a
-   well-defined triangulation, 1e-5 would be the threshold (zero flat tetrahedra), at ten times the
-   deformation.
+1. **1e-6 produces a triangulation in general position but not a well-conditioned one.** Exact
+   degeneracy is gone from 1e-9 onward (zero exact-arithmetic fallbacks in any predicate), but 44
+   tetrahedra still have volume below 1e-14 and the thinnest is 1.4e-16. If the goal were
+   well-shaped tetrahedra rather than a well-defined triangulation — a mesh for simulation, say —
+   the threshold would be 1e-5, at ten times the deformation.
 2. **Paragram is not helped by any jitter in this range**, and cannot be helped by one below
    ~6e-8 at all, because of float32. Its disagreement with CGAL is a property of its precision and
    its cell clipping, not of the input's degeneracy.
