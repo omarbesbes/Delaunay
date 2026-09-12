@@ -574,12 +574,18 @@ def plot(payload: dict, path: str) -> None:
         jit_axis(ax)
         ax.set_yscale("log")
         # a method that failed at some jitter leaves a gap in its curve; mark where
+        any_failed = False
         for m in METHODS:
             bad = [r["jitter"] for r in sel if r["method"] == m and r.get("status") != "ok"]
             if bad:
+                any_failed = True
                 ax.plot(bad, [ax.get_ylim()[0]] * len(bad), "x", ms=7, color=COLORS[m])
         ax.set_ylabel("seconds")
-        ax.set_title(f"{cloud}: time  (x on the axis = the method failed)")
+        # only mention the failure marks when there are any, so a clean sweep does not look
+        # like one where the failures were simply not drawn
+        ax.set_title(
+            f"{cloud}: time" + ("  (x on the axis = the method failed)" if any_failed else "")
+        )
 
         # --- 2. exact-arithmetic fallbacks ----------------------------------------------
         ax = axes[1][col]

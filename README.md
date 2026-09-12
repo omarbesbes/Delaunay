@@ -218,6 +218,9 @@ python jitter_study.py --plot-only results/jitter-<jobid>/jitter.json \
     --markdown mine.md --plot mine.png
 ```
 
+`jitter_sweep.md` is the written-up analysis of the run that settled this (job 1887129): the
+deformation table, the exact-fallback measurements, and why 1e-6 is the right default.
+
 Outputs, in `results/jitter-<jobid>/`: `jitter.md` (report-ready tables), `jitter.png` (three rows
 per cloud: time, exact-predicate share, deformation), `jitter.csv`, `jitter.json`. One process per
 method, all sharing one JSON, so a library that crashes the interpreter only ends its own sweep and
@@ -271,6 +274,8 @@ extension cache; the job does a warm-up call before timing.
   clouds, with and without jitter; log-log diagram with fitted exponents, plus CSV.
 - `jitter_study.py`, `run_jitter.sbatch` — sweep the jitter on the two point clouds: deformation,
   per-method time and correctness, and exact vs filtered predicate counts.
+- `jitter_sweep.md` — the analysis of that sweep: why duplicate points must go first, what each
+  jitter deforms, and the exact-arithmetic fallback rates that justify sigma = 1e-6.
 - `cuda_wait.sh` — waits for a usable CUDA context, and resubmits the job excluding the node when
   one never appears (some Ruche GPU nodes accept a job and then refuse every context).
 - `check_gstar4d.py` — smoke-test gStar4D alone: its own generator, then random clouds, then
