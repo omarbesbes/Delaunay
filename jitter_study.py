@@ -37,7 +37,15 @@ no counters rather than zeros.
 
 The jitter is the benchmark's: an independent Gaussian per coordinate with
 sigma = jitter x (largest extent of the bounding box), from a fixed seed, so a given
-(cloud, jitter) is always the same point set.
+(cloud, jitter) is always the same point set.  Exact duplicate points are removed first, as the
+benchmark does: a Delaunay triangulation is not defined on repeated points, and leaving them in
+measures how each library copes with invalid input rather than with degeneracy.
+
+The benchmark additionally rounds every dataset to float32 so that all methods triangulate exactly
+the same coordinates.  That is deliberately *not* done here: float32 resolves about 6e-8 in the
+unit cube, so it would erase every jitter below 1e-7 -- half the range this sweeps.  Paragram, which
+is a float32 pipeline, is therefore compared against a reference computed on the float32 rounding of
+the points it actually saw, and cannot benefit from a jitter finer than that rounding.
 """
 
 from __future__ import annotations
@@ -210,7 +218,8 @@ def run_method(method: str, pts: np.ndarray, args) -> tuple[np.ndarray, dict]:
         from voronoi_to_delaunay import delaunay_from_adjacency, last_insphere_stats
 
         dev = torch.device(args.device)
-        p_dev = torch.from_numpy(np.ascontiguousarray(pts, np.float32)).to(dev)
+        p32 = np.ascontiguousarray(pts, np.float32)
+        p_dev = torch.from_numpy(p32).to(dev)
 
         def sync():
             if dev.type == "cuda":
@@ -256,6 +265,13 @@ def run_method(method: str, pts: np.ndarray, args) -> tuple[np.ndarray, dict]:
                 "cliques": int(st["cliques"]),
                 "cospherical_tets": int(st["cospherical_tets"]),
             }
+        # Paragram is a float32 pipeline, so it triangulates the float32 rounding of the points,
+        # not the points.  Compare it against a reference on those same coordinates (as is already
+        # done for the two command-line tools) -- otherwise part of its disagreement with CGAL is
+        # just the two working on different inputs.  Note this also caps what Paragram can see: a
+        # jitter below the float32 resolution of the unit cube (~6e-8) does not survive the
+        # rounding at all, which is why no global float32 rounding is applied to the other methods.
+        info["_points"] = p32.astype(np.float64)
         out = tets.cpu().numpy() if hasattr(tets, "cpu") else np.asarray(tets)
         del adjacency, offsets, status, tets, p_dev
         if dev.type == "cuda":
@@ -356,8 +372,19 @@ def sweep(args) -> dict:
     clouds = {}
     for path in args.ply:
         name = os.path.splitext(os.path.basename(path))[0]
-        clouds[name] = T.unit_cube(T.load_ply_vertices(path))
-        print(f"{name}: {len(clouds[name])} points", flush=True)
+        raw = T.load_ply_vertices(path)
+        # Exactly what the benchmark does before anything else: a Delaunay triangulation is not
+        # defined on repeated points, and these clouds carry a few (7 distinct locations shared by
+        # 22 points in iarpa, and similarly in jax).  Leaving them in makes the unjittered runs
+        # measure the libraries' handling of invalid input rather than their handling of
+        # degeneracy, which is the thing under study.
+        pts = np.unique(raw.astype(np.float64), axis=0)
+        clouds[name] = T.unit_cube(pts)
+        print(
+            f"{name}: {len(pts)} points"
+            + (f" ({len(raw) - len(pts)} duplicate rows removed)" if len(pts) < len(raw) else ""),
+            flush=True,
+        )
 
     env = {
         "date": time.strftime("%Y-%m-%d %H:%M:%S"),
