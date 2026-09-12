@@ -852,25 +852,33 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.plot_only:
-        payload = {"_env": {}, "deformations": [], "predicates": [], "runs": []}
-        seen_defo, seen_pred = set(), set()
-        for p in args.plot_only:
-            with open(p) as fh:
+        # Files are merged in the order given and a later file wins, so re-running a few methods
+        # into a new job directory and passing `old.json new.json` replaces exactly those
+        # measurements.  Runs are keyed like everything else: concatenating them instead would
+        # plot the same method twice at the same jitter.
+        env: dict = {}
+        runs: dict[tuple, dict] = {}
+        preds: dict[tuple, dict] = {}
+        defos: dict[tuple, dict] = {}
+        for path in args.plot_only:
+            with open(path) as fh:
                 one = json.load(fh)
-            payload["_env"].update(one.get("_env", {}))
-            payload["runs"] += one.get("runs", [])
-            for d in one.get("deformations", []):
-                if (d["cloud"], d["jitter"]) not in seen_defo:
-                    seen_defo.add((d["cloud"], d["jitter"]))
-                    payload["deformations"].append(d)
+            env.update(one.get("_env", {}))
+            for r in one.get("runs", []):
+                runs[(r["cloud"], r["jitter"], r["method"])] = r
             for q in one.get("predicates", []):
-                k = (q["cloud"], q["jitter"], q["method"])
-                if k not in seen_pred:
-                    seen_pred.add(k)
-                    payload["predicates"].append(q)
+                preds[(q["cloud"], q["jitter"], q["method"])] = q
+            for d in one.get("deformations", []):
+                defos[(d["cloud"], d["jitter"])] = d
+        payload = {
+            "_env": env,
+            "deformations": list(defos.values()),
+            "predicates": list(preds.values()),
+            "runs": list(runs.values()),
+        }
         print(
-            f"{len(payload['runs'])} measurement(s), {len(payload['predicates'])} counter set(s) "
-            f"from {len(args.plot_only)} file(s)"
+            f"{len(runs)} measurement(s), {len(preds)} counter set(s), "
+            f"{len(defos)} cloud/jitter pair(s) from {len(args.plot_only)} file(s)"
         )
     else:
         if not args.ply:
