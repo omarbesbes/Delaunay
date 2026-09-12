@@ -23,9 +23,10 @@ a jitter has actually removed the degeneracy or merely hidden it.  Three of the 
 it:
 
     gDel3D    patch_pygdel3d.py counts doInSphereFast against doInSphereSoS on the GPU
-    CGAL      -DCGAL_PROFILE counts each filtered predicate's calls and its filter failures
-              (bin/cgal_delaunay_profile, run untimed and single-threaded so the counts are
-              reproducible; built by build_tools.sh)
+    CGAL      -DCGAL_PROFILE counts both of its filter stages: the static filter sees every
+              call, and the interval filter's failures are the calls that end in exact
+              arithmetic (bin/cgal_delaunay_profile, run untimed and single-threaded so the
+              counts are reproducible; built by build_tools.sh)
     Paragram  voronoi_to_delaunay.py counts the in-sphere determinants that land inside its
               float64 rounding-error bound -- it has no exact fallback, so those are tests it
               cannot decide at all rather than ones it repairs
@@ -181,11 +182,13 @@ def cgal_predicate_counts(pts: np.ndarray, profile_bin: str) -> dict | None:
             flush=True,
         )
         return None
+    # CGAL filters in two stages: a static filter sees every call, and what it cannot decide goes
+    # to an interval filter whose own failures are the calls that end in exact arithmetic.
     return {
-        "source": "CGAL_PROFILE (1 thread, untimed)",
-        # CGAL's "calls to" already includes the ones its filter failed on, so that is the total
+        "source": "CGAL_PROFILE, static + interval filters (1 thread, untimed)",
         "total": int(info["insphere_calls"]),
         "exact": int(info.get("insphere_failures", 0)),
+        "semistatic": int(info.get("insphere_semistatic_failures", 0)),
         "orientation_total": int(info.get("orientation_calls", 0)),
         "orientation_exact": int(info.get("orientation_failures", 0)),
         "all_predicates_total": int(info.get("predicate_calls", 0)),

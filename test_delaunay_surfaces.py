@@ -587,46 +587,74 @@ def _cgal_subprocess(points: np.ndarray, python: str) -> np.ndarray:
 def _cgal_profile_counters(stderr: str) -> dict:
     """Read CGAL's own predicate counters out of a `-DCGAL_PROFILE` build's stderr.
 
-    Every CGAL filtered predicate evaluates an interval-arithmetic version first and falls back to
-    exact arithmetic only when the interval straddles zero.  Under CGAL_PROFILE each one counts
-    both and a static destructor dumps them at exit, in one of three shapes:
+    CGAL guards each predicate with two filters in series, and profiles them separately:
 
-        [CGAL::Profile_counter]            123456  <what>
-        [CGAL::Profile_branch_counter]         42 /     123456  failures/calls to   : <predicate>
-        [CGAL::Profile_branch_counter_3]        7 /  42 / 123456  ... : <predicate>
+        [CGAL::Profile_branch_counter_3]  0 / 1.978.072 / 1.978.072  semi-static
+                                          failures/attempts/calls to : Side_of_oriented_sphere_3
+        [CGAL::Profile_branch_counter]    0 /         3  failures/calls to : CGAL::Filtered_
+                                          predicate_RT_FT<... Side_of_oriented_sphere_3 ...>
 
-    The convention is the same in all of them: the counter incremented on *every* call is printed
-    last, and the deeper the fallback the earlier it appears.  So the last number is the total and
-    the first is the exact-arithmetic fallback -- which is what "failures" means here.
+    The first line is the *static* filter, which sees every call; the ones it cannot decide fall
+    through to the second, interval-arithmetic filter, whose own failures are the calls that end up
+    in exact arithmetic.  The two lines therefore describe nested populations and must not be added
+    together -- the total is the static layer's call count, and the exact-arithmetic fallbacks are
+    the filtered layer's failures.  A predicate whose static filter never fails prints no second
+    line at all, which is why random points show only three lines.
 
-    Returned as totals over all predicates plus the in-sphere predicate on its own, the one
-    comparable with gDel3D's counters.  A binary built without CGAL_PROFILE prints none of this and
-    the result is empty, so callers see no counters rather than zeros."""
-    out: dict[str, int] = {}
+    In every shape the counter incremented on each call is printed last and the deepest fallback
+    first.  The numbers carry the locale's thousands separators ("1.978.072"), which is why they
+    are not parsed as bare digits.
+
+    Returns totals over all predicates plus the in-sphere and orientation predicates on their own;
+    in-sphere is the one comparable with gDel3D's counters.  A binary built without CGAL_PROFILE
+    prints none of this and the result is empty, so callers see no counters rather than zeros."""
+    NUM = r"\d[\d.,\u202f\u00a0]*"
+    layers: dict[tuple[str, str], list[int]] = {}
     seen = False
     for m in re.finditer(
-        r"\[CGAL::Profile_(?:branch_)?counter(?:_3)?\]\s+((?:\d+\s*/\s*)*\d+)\s+(.*)", stderr or ""
+        rf"\[CGAL::Profile_(?:branch_)?counter(?:_3)?\]\s+({NUM}(?:\s*/\s*{NUM})*)\s+(.*)",
+        stderr or "",
     ):
         seen = True
-        nums = [int(x) for x in re.split(r"\s*/\s*", m.group(1))]
+        nums = [int(re.sub(r"[.,\u202f\u00a0]", "", t)) for t in re.split(r"\s*/\s*", m.group(1))]
         what = m.group(2).lower()
-        if len(nums) > 1:
-            pairs = [("calls", nums[-1]), ("failures", nums[0])]
-        elif "failure" in what:
-            pairs = [("failures", nums[0])]
+        if "side_of_oriented_sphere_3" in what:
+            family = "insphere"
+        elif re.search(r"(?<![a-z_])orientation_3", what):  # not Coplanar_orientation_3
+            family = "orientation"
         else:
-            pairs = [("calls", nums[0])]
-        for kind, count in pairs:
-            out[f"predicate_{kind}"] = out.get(f"predicate_{kind}", 0) + count
-            if "side_of_oriented_sphere" in what:
-                out[f"insphere_{kind}"] = out.get(f"insphere_{kind}", 0) + count
-            elif "orientation_3" in what:
-                out[f"orientation_{kind}"] = out.get(f"orientation_{kind}", 0) + count
-    if not seen and "[CGAL::" in (stderr or ""):
-        # the profiler ran but in a shape this does not know: say so instead of reporting nothing
-        out["profile_unparsed"] = "\n".join(
-            ln for ln in stderr.splitlines() if "[CGAL::" in ln
-        )[:2000]
+            family = "other"
+        # "semi-static" marks the outer, static-filter layer; anything else is the inner one
+        layer = "static" if "semi-static" in what else "filtered"
+        acc = layers.setdefault((family, layer), [0, 0])
+        acc[0] += nums[0]    # failures of this layer
+        acc[1] += nums[-1]   # calls reaching this layer
+    if not seen:
+        out: dict = {}
+        if "[CGAL::" in (stderr or ""):
+            # the profiler ran but in a shape this does not know: say so instead of nothing
+            out["profile_unparsed"] = "\n".join(
+                ln for ln in stderr.splitlines() if "[CGAL::" in ln
+            )[:2000]
+        return out
+
+    out = {}
+    total_calls = total_exact = 0
+    for family in ("insphere", "orientation", "other"):
+        static, filtered = layers.get((family, "static")), layers.get((family, "filtered"))
+        if not (static or filtered):
+            continue
+        calls = static[1] if static else filtered[1]
+        exact = filtered[0] if filtered else 0
+        total_calls += calls
+        total_exact += exact
+        if family != "other":
+            out[f"{family}_calls"] = calls
+            out[f"{family}_failures"] = exact
+            if static:
+                # calls the static filter could not decide, i.e. what reached the interval filter
+                out[f"{family}_semistatic_failures"] = static[0]
+    out["predicate_calls"], out["predicate_failures"] = total_calls, total_exact
     return out
 
 
