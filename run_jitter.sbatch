@@ -6,7 +6,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8          # CGAL parallel, GeoDel and the CPU repair use these cores
-#SBATCH --mem=64G
+#SBATCH --mem=128G                 # gDel3D's CPU star-splaying repair on the *unjittered*
+                                   # clouds was OOM-killed at 64G (job 1886808)
 #SBATCH --time=08:00:00
 # Sweep the size of the jitter on the two point clouds only, and record for every value:
 #   how much it deforms the cloud, what each method costs, and how often each method's in-sphere

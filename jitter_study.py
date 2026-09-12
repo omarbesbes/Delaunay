@@ -169,6 +169,17 @@ def cgal_predicate_counts(pts: np.ndarray, profile_bin: str) -> dict | None:
             if v is not None:
                 os.environ[k] = v
     if "insphere_calls" not in info:
+        why = info.get("profile_unparsed")
+        print(
+            "\n   CGAL predicate counters unavailable: "
+            + (
+                f"the profiler printed a shape this does not parse:\n{why}"
+                if why
+                else f"{profile_bin} printed no [CGAL::Profile_*] lines "
+                "(is it really a -DCGAL_PROFILE build?)"
+            ),
+            flush=True,
+        )
         return None
     return {
         "source": "CGAL_PROFILE (1 thread, untimed)",

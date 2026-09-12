@@ -589,29 +589,44 @@ def _cgal_profile_counters(stderr: str) -> dict:
 
     Every CGAL filtered predicate evaluates an interval-arithmetic version first and falls back to
     exact arithmetic only when the interval straddles zero.  Under CGAL_PROFILE each one counts
-    both, and a static destructor dumps them at exit as
+    both and a static destructor dumps them at exit, in one of three shapes:
 
-        [CGAL::Profile_counter]     123456 calls to    : ...Side_of_oriented_sphere_3...
-        [CGAL::Profile_counter]         42 failures of : ...Side_of_oriented_sphere_3...
+        [CGAL::Profile_counter]            123456  <what>
+        [CGAL::Profile_branch_counter]         42 /     123456  failures/calls to   : <predicate>
+        [CGAL::Profile_branch_counter_3]        7 /  42 / 123456  ... : <predicate>
 
-    "failures" means the filter could not decide, i.e. exactly the exact-arithmetic fallbacks.
-    Returned as totals over all predicates plus the in-sphere predicate on its own, which is the
-    one comparable with gDel3D's counters.  A binary built without CGAL_PROFILE prints none of
-    this and the result is empty, so callers see no counters rather than zeros."""
+    The convention is the same in all of them: the counter incremented on *every* call is printed
+    last, and the deeper the fallback the earlier it appears.  So the last number is the total and
+    the first is the exact-arithmetic fallback -- which is what "failures" means here.
+
+    Returned as totals over all predicates plus the in-sphere predicate on its own, the one
+    comparable with gDel3D's counters.  A binary built without CGAL_PROFILE prints none of this and
+    the result is empty, so callers see no counters rather than zeros."""
     out: dict[str, int] = {}
-    for m in re.finditer(r"\[CGAL::Profile_counter\]\s+(\d+)\s+(.*)", stderr or ""):
-        count, what = int(m.group(1)), m.group(2)
-        if "calls to" in what:
-            kind = "calls"
-        elif "failures of" in what:
-            kind = "failures"
+    seen = False
+    for m in re.finditer(
+        r"\[CGAL::Profile_(?:branch_)?counter(?:_3)?\]\s+((?:\d+\s*/\s*)*\d+)\s+(.*)", stderr or ""
+    ):
+        seen = True
+        nums = [int(x) for x in re.split(r"\s*/\s*", m.group(1))]
+        what = m.group(2).lower()
+        if len(nums) > 1:
+            pairs = [("calls", nums[-1]), ("failures", nums[0])]
+        elif "failure" in what:
+            pairs = [("failures", nums[0])]
         else:
-            continue
-        out[f"predicate_{kind}"] = out.get(f"predicate_{kind}", 0) + count
-        if "side_of_oriented_sphere" in what.lower():
-            out[f"insphere_{kind}"] = out.get(f"insphere_{kind}", 0) + count
-        elif "orientation_3" in what.lower():
-            out[f"orientation_{kind}"] = out.get(f"orientation_{kind}", 0) + count
+            pairs = [("calls", nums[0])]
+        for kind, count in pairs:
+            out[f"predicate_{kind}"] = out.get(f"predicate_{kind}", 0) + count
+            if "side_of_oriented_sphere" in what:
+                out[f"insphere_{kind}"] = out.get(f"insphere_{kind}", 0) + count
+            elif "orientation_3" in what:
+                out[f"orientation_{kind}"] = out.get(f"orientation_{kind}", 0) + count
+    if not seen and "[CGAL::" in (stderr or ""):
+        # the profiler ran but in a shape this does not know: say so instead of reporting nothing
+        out["profile_unparsed"] = "\n".join(
+            ln for ln in stderr.splitlines() if "[CGAL::" in ln
+        )[:2000]
     return out
 
 
