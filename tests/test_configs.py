@@ -50,5 +50,6 @@ def test_every_generated_flag_exists(name):
 @pytest.mark.parametrize("name", EXPERIMENTS)
 def test_referenced_data_files_exist(name):
     cfg = M.load_yaml(os.path.join(M.CONFIG_DIR, "experiments", f"{name}.yaml"))
-    for path in cfg.get("ply") or []:
+    ply = cfg.get("ply") or []
+    for path in [ply] if isinstance(ply, str) else ply:
         assert os.path.exists(path), f"{name}: missing input {path}"

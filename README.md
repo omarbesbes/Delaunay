@@ -117,6 +117,20 @@ still works and the two paths cannot drift apart.
 | `scaling_tile` | time versus point count, 2k → 1M, by tiling copies | ~4 h |
 | `scaling_densify` | the same, by densifying the same volume | ~4 h |
 | `report` | Markdown report and charts from a benchmark JSON | seconds |
+| `triangulate` | run **one method on one PLY** and write the tetrahedra (see below) | seconds |
+
+### Triangulating your own cloud
+
+```bash
+python main.py experiment=triangulate method=gdel3d ply=path/to/cloud.ply
+python main.py experiment=triangulate method=geodel ply=cloud.ply out=results/mine check=true
+```
+
+Writes `<out>/<cloud>_<method>/` with `points.npy`, `tets.npy` (indices into it), `mesh.vtk` for
+ParaView, and `summary.json` (timing, preprocessing, and the difference to CGAL with `check=true`).
+Methods: `paragram`, `gdel3d`, `gstar4d`, `dewall`, `geodel`, `cgal_parallel`, `cgal_sequential`.
+Duplicate points are removed and the cloud normalised into the unit cube as in the benchmark (the
+map back is in `summary.json`); no jitter is added unless asked (`jitter=1e-6`).
 
 ## 📊 Results
 

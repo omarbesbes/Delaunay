@@ -34,6 +34,7 @@ STUDIES = {
     "scaling": ("scaling_study", "Time versus number of points (2k .. 1M)"),
     "jitter": ("jitter_study", "Sweep the size of the input perturbation"),
     "report": ("make_report", "Markdown report and charts from one or more result JSONs"),
+    "triangulate": ("triangulate", "Run one method on one PLY file and write the tetrahedra"),
 }
 
 

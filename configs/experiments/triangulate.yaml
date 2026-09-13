@@ -1,0 +1,18 @@
+description: Run one method on one point cloud and write its tetrahedra (not a measurement)
+study: triangulate
+
+# Both are required and have no sensible default, so they are given on the command line:
+#   python main.py experiment=triangulate method=gdel3d ply=data/voronoi_jax_068.ply
+#   python main.py experiment=triangulate method=geodel ply=cloud.ply out=results/mine check=true
+#
+# method: paragram | gdel3d | gstar4d | dewall | geodel | cgal_parallel | cgal_sequential
+
+# Results go to <out>/<cloud>_<method>/{points.npy, tets.npy, mesh.vtk, summary.json}
+out: results/triangulate
+
+# The cloud as given: no perturbation.  The benchmark uses 1e-6; see docs/jitter_sweep.md for
+# what each value changes.
+jitter: 0
+
+# Also run CGAL on the same points and report the tetrahedron-set difference.
+check: false
