@@ -9,7 +9,8 @@ same `run_method` the jitter study uses, and writes the result to `<out>/<cloud>
 
     points.npy     (N, 3) float64 -- the points the tetrahedra index (see below)
     tets.npy       (T, 4) int64   -- one row per tetrahedron, indices into points.npy
-    mesh.vtk       the same as a legacy VTK unstructured grid, for ParaView and friends
+    mesh.vtk       the tetrahedra as a legacy VTK unstructured grid (cells), for ParaView
+    mesh.ply       every unique face as a triangle mesh, for CloudCompare and any mesh viewer
     summary.json   method, sizes, seconds, preprocessing, and the CGAL comparison if --check
 
 Preprocessing follows the benchmark, and every step is recorded in summary.json: exact duplicate
@@ -24,8 +25,10 @@ viewer; the normalisation is internal and undone before writing (`--unit-cube-ou
 float32, rescaled copy of the points, so for them `points.npy` holds that copy, mapped back into
 the input frame, and summary.json says so.
 
-CloudCompare reads a VTK unstructured grid as its points only and does not draw tetrahedral cells;
-ParaView does (`Extract Edges` or a `Clip` shows the interior).
+A tetrahedralization fills the convex hull, so from outside every viewer shows only the hull.
+CloudCompare reads the VTK grid as points only; load `mesh.ply` there instead and tick *Wireframe*
+in its properties, or cut it with Tools > Segmentation > Cross Section. ParaView reads `mesh.vtk`
+and shows the cells with a `Clip` filter.
 """
 
 from __future__ import annotations
@@ -54,6 +57,37 @@ def write_vtk(path: str, points: np.ndarray, tets: np.ndarray) -> None:
         np.savetxt(fh, np.hstack([np.full((len(tets), 1), 4), tets]), fmt="%d")
         fh.write(f"CELL_TYPES {len(tets)}\n")
         fh.write("\n".join(["10"] * len(tets)) + "\n")
+
+
+def write_ply_faces(path: str, points: np.ndarray, tets: np.ndarray) -> int:
+    """Binary PLY of the tetrahedra's faces as a triangle mesh -- what CloudCompare can display.
+
+    A tetrahedralization fills the convex hull, so from outside only the hull is visible; in
+    CloudCompare tick *Wireframe* in the mesh's properties or use Tools > Segmentation > Cross
+    Section to see the tetrahedra. Each interior face is shared by two tetrahedra and is written
+    once. Returns the number of faces written.
+    """
+    faces = np.concatenate(
+        [tets[:, [1, 2, 3]], tets[:, [0, 2, 3]], tets[:, [0, 1, 3]], tets[:, [0, 1, 2]]]
+    )
+    faces = np.unique(np.sort(faces, axis=1), axis=0).astype(np.int32)
+    header = (
+        "ply\nformat binary_little_endian 1.0\n"
+        "comment Delaunay tetrahedra: every unique face, from DelaunayBench triangulate\n"
+        f"element vertex {len(points)}\n"
+        "property double x\nproperty double y\nproperty double z\n"
+        f"element face {len(faces)}\n"
+        "property list uchar int vertex_indices\n"
+        "end_header\n"
+    )
+    face_rec = np.empty(len(faces), dtype=[("n", "u1"), ("v", "<i4", (3,))])
+    face_rec["n"] = 3
+    face_rec["v"] = faces
+    with open(path, "wb") as fh:
+        fh.write(header.encode("ascii"))
+        fh.write(np.ascontiguousarray(points, dtype="<f8").tobytes())
+        fh.write(face_rec.tobytes())
+    return int(len(faces))
 
 
 def main() -> int:
@@ -215,6 +249,7 @@ def main() -> int:
     np.save(os.path.join(out, "points.npy"), points_out)
     np.save(os.path.join(out, "tets.npy"), tets)
     write_vtk(os.path.join(out, "mesh.vtk"), points_out, tets)
+    summary["faces_in_mesh_ply"] = write_ply_faces(os.path.join(out, "mesh.ply"), points_out, tets)
     with open(os.path.join(out, "summary.json"), "w") as fh:
         json.dump(summary, fh, indent=1, default=str)
 
@@ -228,7 +263,11 @@ def main() -> int:
             if c["identical"]
             else f"  -- vs CGAL: {c['ref_only']} missing, {c['method_only']} extra"
         )
-    print(line + f"\nwrote {out}/{{points.npy, tets.npy, mesh.vtk, summary.json}}")
+    print(
+        line + f"\nwrote {out}/{{points.npy, tets.npy, mesh.vtk, mesh.ply, summary.json}}"
+        "\n  mesh.ply is the faces as a triangle mesh (CloudCompare: tick Wireframe, or "
+        "Tools > Segmentation > Cross Section); mesh.vtk keeps the cells (ParaView)"
+    )
     return 0
 
 
