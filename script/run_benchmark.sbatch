@@ -8,12 +8,12 @@
 #SBATCH --cpus-per-task=8          # CGAL parallel (TBB) and the CPU repair use these cores
 #SBATCH --mem=64G
 #SBATCH --time=04:00:00
-# Usage:  sbatch run_ruche.sbatch                 (your two point clouds, 10 repeats)
-#         FULL=1 sbatch run_ruche.sbatch          (also analytic surfaces + meshes, 20k samples each)
-#         BASELINE=0 sbatch run_ruche.sbatch      (only the corrected Paragram, no upstream baseline)
-#         JITTER=0 sbatch run_ruche.sbatch        (skip the jittered pass)
-#         REPEATS=5 sbatch run_ruche.sbatch
-#         TOOL_TIMEOUT=120 sbatch run_ruche.sbatch   (give a slow external tool longer than 10 s)
+# Usage:  sbatch script/run_benchmark.sbatch                 (your two point clouds, 10 repeats)
+#         FULL=1 sbatch script/run_benchmark.sbatch          (also analytic surfaces + meshes, 20k samples each)
+#         BASELINE=0 sbatch script/run_benchmark.sbatch      (only the corrected Paragram, no upstream baseline)
+#         JITTER=0 sbatch script/run_benchmark.sbatch        (skip the jittered pass)
+#         REPEATS=5 sbatch script/run_benchmark.sbatch
+#         TOOL_TIMEOUT=120 sbatch script/run_benchmark.sbatch   (give a slow external tool longer than 10 s)
 # Methods: Paragram + conversion (GPU), gDel3D (GPU), gStar4D (GPU), Local DeWall (GPU),
 #          GeoDel / Geogram (CPU-parallel), CGAL parallel (TBB) and CGAL sequential.
 set -euo pipefail
@@ -31,6 +31,8 @@ export CXX=${CXX:-x86_64-conda-linux-gnu-g++}
 export PARAGRAM_MAX_PLANES=128 PARAGRAM_MAX_VERTS=128     # Paragram build variant (JIT, first import)
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+# the studies live in src/ and import one another by plain module name
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 
 # conda-forge keeps the CUDA headers and libraries under $CONDA_PREFIX/targets/x86_64-linux, which
 # torch's JIT build does not add when compiling *host* code (ext.cpp): make them visible here.
@@ -140,7 +142,7 @@ for attempt in $(seq 1 6); do
     EXCLUDE=$(sort -u results/unusable_nodes.txt | grep -v '^unknown$' | paste -sd, -)
     if [ "$RETRY" -lt "$RETRY_MAX" ] && [ -n "$EXCLUDE" ]; then
       echo "   resubmitting with --exclude=$EXCLUDE (retry $((RETRY + 1))/$RETRY_MAX)"
-      sbatch --exclude="$EXCLUDE" --export=ALL,RETRY=$((RETRY + 1)),RETRY_MAX="$RETRY_MAX" run_ruche.sbatch
+      sbatch --exclude="$EXCLUDE" --export=ALL,RETRY=$((RETRY + 1)),RETRY_MAX="$RETRY_MAX" script/run_benchmark.sbatch
     else
       echo "   giving up after $RETRY retries; inspect $OUT/diagnose_gpu.txt"
     fi
@@ -152,7 +154,7 @@ done
 
 # ---- preflight: build any missing tool, then report what the benchmark will actually run ----
 echo "== preflight: tools and methods"
-GPU_ARCHS="$ARCH" bash build_tools.sh || echo "   WARNING: a tool failed to build; the benchmark will skip it"
+GPU_ARCHS="$ARCH" bash script/build_tools.sh || echo "   WARNING: a tool failed to build; the benchmark will skip it"
 python - <<'PY'
 import importlib.util
 import os
@@ -193,7 +195,7 @@ run_pass() {  # run_pass <log-name> <json> <extra args...>
     local rc=0
     # `timeout` bounds an attempt that hangs instead of crashing (gDel3D has done both);
     # --resume then continues past the measurement that was killed.  124 = killed by timeout.
-    timeout "$PASS_TIMEOUT" python test_delaunay_surfaces.py $COMMON "$@" --resume \
+    timeout "$PASS_TIMEOUT" python main.py experiment=benchmark -- $COMMON "$@" --resume \
       --json "$json" 2>&1 | tee -a "$OUT/$name.log" || rc=$?
     [ "$rc" = 0 ] && return 0
     # 134 = SIGABRT, 139 = SIGSEGV: the library killed the interpreter, not an exception
@@ -224,5 +226,5 @@ if [ "$JITTER" != "0" ]; then
   REPORT_ARGS+=(--jitter "$OUT/results_jitter.json")
 fi
 
-python make_report.py "${REPORT_ARGS[@]}" -o "$OUT/report.md"
+python main.py experiment=report -- "${REPORT_ARGS[@]}" -o "$OUT/report.md"
 echo "== done: $OUT/report.md"

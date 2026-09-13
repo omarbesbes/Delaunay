@@ -60,7 +60,7 @@ import time
 import numpy as np
 from scipy.spatial import ConvexHull, cKDTree
 
-import test_delaunay_surfaces as T
+import benchmark as T
 
 METHODS = [
     "paragram",
@@ -110,7 +110,8 @@ def deformation(base: np.ndarray, pts: np.ndarray, jitter: float) -> dict:
     The displacement of a point is the length of a 3-vector whose components are each N(0, sigma),
     so its median is 1.538 sigma, not sigma.  What matters is not that displacement on its own but
     its ratio to the distance between neighbouring points: a shift of 0.05 % of the point spacing
-    is invisible in any downstream use of the cloud, and still enough to break a tie."""
+    is invisible in any downstream use of the cloud, and still enough to break a tie.
+    """
     disp = np.linalg.norm(pts - base, axis=1)
     d0, nn0 = cKDTree(base).query(base, k=2)
     d1, nn1 = cKDTree(pts).query(pts, k=2)
@@ -141,7 +142,8 @@ def reference_metrics(pts: np.ndarray, ref: np.ndarray, backend: str, seconds: f
     """What the perturbation did to the triangulation itself, not just to the points.
 
     Sliver and volume statistics over ~700k tetrahedra are not cheap, so this is computed once per
-    (cloud, jitter) and stored; the per-method processes reuse it through --resume."""
+    (cloud, jitter) and stored; the per-method processes reuse it through --resume.
+    """
     m = T.analyze(pts, ref, seconds, ConvexHull(pts))
     return {
         "backend": backend,
@@ -164,7 +166,8 @@ def cgal_predicate_counts(pts: np.ndarray, profile_bin: str) -> dict | None:
 
     Single-threaded on purpose: the parallel insertion visits the points in an order that depends
     on the thread schedule, so its counts wobble between runs and would not be comparable across
-    jitters."""
+    jitters.
+    """
     if not (profile_bin and os.path.exists(profile_bin)):
         return None
     keep_bin, keep_thr = os.environ.get("CGAL_DELAUNAY_BIN"), os.environ.get("CGAL_THREADS")
@@ -346,7 +349,10 @@ def run_method(method: str, pts: np.ndarray, args) -> tuple[np.ndarray, dict]:
 
 
 def measure(method: str, pts: np.ndarray, args) -> tuple[np.ndarray, dict]:
-    """Warm-up, then --repeats timed runs.  Counters come from the first timed run."""
+    """Warm-up, then --repeats timed runs.
+
+    Counters come from the first timed run.
+    """
     run_method(method, pts, args)  # warm-up: JIT, clocks, first-touch page faults
     tets, first = run_method(method, pts, args)
     times = [first["seconds"]]
@@ -546,7 +552,7 @@ def plot(payload: dict, path: str) -> None:
     linthresh = min((j for _, j in defos if j > 0), default=1e-9)
 
     fig, axes = plt.subplots(3, len(clouds), figsize=(6.8 * len(clouds), 12.5), squeeze=False)
-    seen: dict[str, object] = {}       # method curves, rows 1 and 2
+    seen: dict[str, object] = {}  # method curves, rows 1 and 2
     seen_defo: dict[str, object] = {}  # deformation curves, row 3
 
     def jit_axis(ax):
@@ -613,17 +619,20 @@ def plot(payload: dict, path: str) -> None:
             (
                 "displacement / point spacing",
                 [100 * (defos[(cloud, j)]["displacement_over_spacing"] or 0) for j in js],
-                "-", "o",
+                "-",
+                "o",
             ),
             (
                 "convex-hull volume change",
                 [100 * defos[(cloud, j)].get("hull_volume_rel_change", 0) for j in js],
-                "--", "s",
+                "--",
+                "s",
             ),
             (
                 "points whose nearest neighbour changed",
                 [100 * defos[(cloud, j)]["nearest_neighbour_changed"] for j in js],
-                "-.", "^",
+                "-.",
+                "^",
             ),
             (
                 "tetrahedra added to the reference",
@@ -631,7 +640,8 @@ def plot(payload: dict, path: str) -> None:
                     100 * (defos[(cloud, j)]["reference"]["tets"] - base_tets) / max(1, base_tets)
                     for j in js
                 ],
-                ":", "D",
+                ":",
+                "D",
             ),
         ]
         for lab, ys, style, marker in series:
@@ -687,13 +697,32 @@ def write_csv(payload: dict, path: str) -> None:
     defos = {(d["cloud"], d["jitter"]): d for d in payload["deformations"]}
     preds = {(p["cloud"], p["jitter"], p["method"]): p for p in payload["predicates"]}
     cols = [
-        "cloud", "jitter", "method", "status", "runs", "seconds", "min", "std",
-        "tets", "ref_only", "method_only",
-        "insphere_total", "insphere_exact", "insphere_exact_pct",
-        "sigma", "displacement_median", "displacement_over_spacing", "spacing_median",
-        "hull_volume_rel_change", "nearest_neighbour_changed",
-        "duplicates_before", "duplicates_after",
-        "reference_tets", "reference_slivers", "reference_flat", "error",
+        "cloud",
+        "jitter",
+        "method",
+        "status",
+        "runs",
+        "seconds",
+        "min",
+        "std",
+        "tets",
+        "ref_only",
+        "method_only",
+        "insphere_total",
+        "insphere_exact",
+        "insphere_exact_pct",
+        "sigma",
+        "displacement_median",
+        "displacement_over_spacing",
+        "spacing_median",
+        "hull_volume_rel_change",
+        "nearest_neighbour_changed",
+        "duplicates_before",
+        "duplicates_after",
+        "reference_tets",
+        "reference_slivers",
+        "reference_flat",
+        "error",
     ]
     with open(path, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
@@ -705,9 +734,14 @@ def write_csv(payload: dict, path: str) -> None:
                 {
                     k: d.get(k)
                     for k in (
-                        "sigma", "displacement_median", "displacement_over_spacing",
-                        "spacing_median", "hull_volume_rel_change", "nearest_neighbour_changed",
-                        "duplicates_before", "duplicates_after",
+                        "sigma",
+                        "displacement_median",
+                        "displacement_over_spacing",
+                        "spacing_median",
+                        "hull_volume_rel_change",
+                        "nearest_neighbour_changed",
+                        "duplicates_before",
+                        "duplicates_after",
                     )
                 }
             )
@@ -744,8 +778,12 @@ def write_markdown(payload: dict, path: str) -> None:
     ]
 
     def table(header: str, rows: list[tuple[str, list[str]]], js: list[float]) -> list[str]:
-        out = [header, "", "| method | " + " | ".join(f"{j:g}" for j in js) + " |",
-               "|---" * (len(js) + 1) + "|"]
+        out = [
+            header,
+            "",
+            "| method | " + " | ".join(f"{j:g}" for j in js) + " |",
+            "|---" * (len(js) + 1) + "|",
+        ]
         for label, cells in rows:
             if set(cells) != {"-"}:
                 out.append(f"| {label} | " + " | ".join(cells) + " |")
@@ -798,7 +836,9 @@ def write_markdown(payload: dict, path: str) -> None:
             for j in js:
                 r = runs.get((cloud, j, m))
                 if r is None or r.get("status") != "ok":
-                    cells.append("-" if r is None else "**" + str(r.get("status") or "failed") + "**")
+                    cells.append(
+                        "-" if r is None else "**" + str(r.get("status") or "failed") + "**"
+                    )
                     continue
                 c = r.get("compare") or {}
                 miss, extra = c.get("ref_only", 0), c.get("method_only", 0)

@@ -3,9 +3,10 @@
 # Creates a self-contained conda env in $WORKDIR with Python 3.12, CUDA 12.8 (nvcc), GCC 13, torch cu128,
 # CGAL headers + TBB, then builds: the parallel CGAL tool, Paragram (patched), pyGDel3D (patched),
 # Local DeWall (patched), gStar4D (patched) and GeoDel.
-# Usage:  bash setup_ruche.sh        (takes ~15-30 min)
+# Usage:  bash script/first_install.sh        (takes ~15-30 min)
 set -euo pipefail
-cd "$(dirname "$0")"
+# the script lives in script/ but every path below is relative to the repository root
+cd "$(dirname "$0")/.."
 ROOT=$PWD
 mkdir -p bin third_party results    # git-ignored, absent in a fresh clone
 : "${WORKDIR:?WORKDIR is not set (are you on Ruche?)}"
@@ -44,7 +45,7 @@ echo "python: $(python -V) | nvcc: $(nvcc --version | tail -1) | host compiler: 
 
 echo "== [2/7] python packages (torch cu128, numpy, scipy, matplotlib, cgal bindings)"
 # cu128 wheels have no Volta (sm_70) kernels: for the V100 partitions (gpu, gpu_test) install
-# the cu126 build instead with  TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 bash setup_ruche.sh
+# the cu126 build instead with  TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 bash script/first_install.sh
 PIP_FORCE=""
 [ "${REBUILD:-0}" = "1" ] && PIP_FORCE="--force-reinstall"
 pip install -q $PIP_FORCE torch --index-url "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
@@ -61,12 +62,12 @@ if "sm_70" not in archs:
     print(
         "NOTE: no sm_70 kernels -> the V100 partitions (gpu, gpu_test) cannot run Paragram or gDel3D\n"
         "      with this build. Use --partition=gpua100 (A100, sm_80), or reinstall with\n"
-        "        TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 REBUILD=1 bash setup_ruche.sh"
+        "        TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 REBUILD=1 bash script/first_install.sh"
     )
 PY
 
 echo "== [3/7] standalone tools: parallel CGAL + Local DeWall + gStar4D"
-GPU_ARCHS="$ARCHS" bash build_tools.sh ${REBUILD:+--force}
+GPU_ARCHS="$ARCHS" bash script/build_tools.sh ${REBUILD:+--force}
 python - <<'PY'
 import subprocess
 
@@ -81,14 +82,14 @@ PY
 
 echo "== [4/7] Paragram (patched: relative clipping pad, cell budget)"
 [ -d third_party/paragram ] || git clone -q --recursive https://github.com/zenseact/paragram.git third_party/paragram
-python patch_paragram.py third_party/paragram
+python script/patch_paragram.py third_party/paragram
 pip install -q $PIP_FORCE --no-deps third_party/paragram
 python -c "import paragram, inspect; print('paragram import OK; bbox_pad:', 'bbox_pad' in inspect.signature(paragram.voronoi_diagram).parameters)"
 echo "   (Paragram's CUDA extension is JIT-compiled at first use, inside the SLURM job on the GPU node)"
 
 echo "== [5/7] pyGDel3D (patched: dead-tet flags, phase timers, predicate counters, TORCH_CUDA_ARCH_LIST)"
 [ -d third_party/pyGDel3D ] || git clone -q https://github.com/half-potato/pyGDel3D.git third_party/pyGDel3D
-python patch_pygdel3d.py third_party/pyGDel3D
+python script/patch_pygdel3d.py third_party/pyGDel3D
 pip install -q $PIP_FORCE --no-build-isolation --no-deps third_party/pyGDel3D
 python -c "import gdel3d; print('pyGDel3D OK; get_stats:', hasattr(gdel3d.DelOutput, 'get_stats'))"
 
@@ -98,8 +99,8 @@ python -c "import geodel; print('GeoDel', geodel.__version__, 'OK; max threads:'
 
 echo "== [7/7] prefetch meshes for the full suite (optional; compute nodes may lack internet)"
 python - <<'PY' || echo "   mesh download failed (only needed for the full suite)"
-import test_delaunay_surfaces as T
+import benchmark as T
 for m in T.DEFAULT_MODELS:
     T.load_obj_vertices(m); print("  cached", m)
 PY
-echo "== setup done. Submit a job with:  sbatch run_ruche.sbatch"
+echo "== setup done. Submit a job with:  sbatch script/run_benchmark.sbatch"

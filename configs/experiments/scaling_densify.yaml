@@ -1,0 +1,22 @@
+description: As `scaling_tile`, but growing the cloud by densifying the same volume
+study: scaling
+
+ply:
+  - data/voronoi_iarpa_001.ply
+  - data/voronoi_jax_068.ply
+sizes: ["2000:200000:10000", "200000", "300000:1000000:100000"]
+
+# densify = same area at higher resolution (new points sampled inside the cloud's own Delaunay
+# tetrahedra).  docs/upsampling_methods.md compares the two axes.
+upsample: densify
+
+jitter: [0, 1.0e-6]
+methods:
+  [paragram, gdel3d, gstar4d, dewall, geodel, cgal_parallel, cgal_sequential]
+repeats: 3
+measure_timeout: 300
+resume: true
+
+json: results/scaling_densify/scaling.json
+csv: results/scaling_densify/scaling.csv
+plot: results/scaling_densify/scaling.png

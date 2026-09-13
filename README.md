@@ -1,340 +1,204 @@
-# Delaunay benchmark: GPU methods vs CGAL on surface point clouds
+<div align="center">
 
-Benchmarks 3D Delaunay tetrahedralization methods on the same float32 point sets and compares every
-result against an exact CGAL reference, tetrahedron for tetrahedron:
+# DelaunayBench: GPU Delaunay triangulation on real point clouds
 
-| method | what runs | precision |
+[![python](https://img.shields.io/badge/-Python_3.10-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![CUDA](https://img.shields.io/badge/CUDA-12.8-76B900?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
+[![CGAL](https://img.shields.io/badge/CGAL-5.6.1-blue.svg)](https://www.cgal.org/)
+
+<p align="center">
+  <img width="85%" src="./images/jitter_sweep.png">
+</p>
+
+</div>
+
+## 📌 Description
+
+Six published Delaunay triangulation methods — four of them on GPU — report large speed-ups over
+CGAL, measured on *uniformly random points*. Real LiDAR and photogrammetric clouds are not uniform:
+they sample surfaces on a sensor grid, so large groups of points are exactly coplanar and the
+Delaunay triangulation is **not unique** there. This repository measures what that costs, on two
+such clouds, against an exact CGAL reference, tetrahedron for tetrahedron.
+
+The headline result is that degeneracy, not point count, is what separates these implementations.
+gDel3D is the fastest method on perturbed input (0.046 s for 100 000 points, output identical to
+CGAL), but on the raw cloud **7.8 % of its in-sphere tests fall back to exact arithmetic**, which
+makes it 18× slower and yields 48 889 spurious tetrahedra — while CGAL needs exact arithmetic
+*zero* times on the same input. A perturbation of 1e-9, five thousandths of one percent of the
+distance between neighbouring points, removes the problem entirely.
+
+Getting that number required instrumenting the libraries ourselves
+([`script/patch_pygdel3d.py`](script/patch_pygdel3d.py) adds three counters to gDel3D's CUDA
+kernels; CGAL is built with `-DCGAL_PROFILE`), because none of them exposes a usable one.
+Full analysis in [`docs/jitter_sweep.md`](docs/jitter_sweep.md).
+
+## 📁 Project structure
+
+```
+├── configs                <- One YAML per experiment
+│   └── experiments        <- benchmark, jitter_sweep, scaling_tile, ...
+├── data                   <- The two photogrammetric point clouds (PLY)
+├── docs                   <- Analyses, cluster notes, presentation
+├── images                 <- Figures used in this README
+├── notebooks              <- Exploring a result JSON without recomputing it
+├── script                 <- Install, build, SLURM jobs, upstream patches
+├── src                    <- The benchmark driver and the three studies
+├── tests                  <- Pytest tests
+└── main.py                <- Entry point: python main.py experiment=<name>
+```
+
+## 💻 Environment requirements
+
+Tested on **Ruche** (Mésocentre Paris-Saclay): NVIDIA A100-SXM4 40 GB, CUDA 12.8, 8 CPU cores,
+Python 3.10, torch 2.11, CGAL 5.6.1. Any CUDA GPU of compute capability 7.0+ should work — set
+`GPU_ARCHS` in [`script/build_tools.sh`](script/build_tools.sh) for a different one.
+
+Everything except the four GPU methods runs on a CPU-only machine, and the test suite needs only
+numpy.
+
+## 🏗 Installation
+
+```bash
+git clone https://github.com/omarbesbes/DelaunayBench
+cd DelaunayBench
+
+bash script/first_install.sh     # conda env, torch, the six libraries, the compiled tools
+conda activate "$WORKDIR/envs/delaunay"
+```
+
+`first_install.sh` clones and patches the upstream libraries rather than vendoring them: three of
+the six need source changes to build on this cluster or to report what we measure, and each patch
+explains why at the top of its file. Expect 15–30 minutes, most of it compiling CUDA.
+
+## 📦 Datasets
+
+The two point clouds are tracked in [`data/`](data/) — about 100 000 points each, from the IARPA
+and JAX photogrammetric benchmarks:
+
+```text
+data/voronoi_iarpa_001.ply     99 990 points (99 975 distinct)
+data/voronoi_jax_068.ply       99 981 points (99 962 distinct)
+```
+
+Both contain exactly repeated points, removed before anything else: a Delaunay triangulation is
+not defined on repeated points, and leaving them in turned out to cause *every* failure we first
+attributed to degeneracy ([`docs/jitter_sweep.md`](docs/jitter_sweep.md), §0).
+
+The full benchmark additionally samples analytic surfaces (sphere, torus, Klein bottle, trefoil)
+and downloads a few standard meshes; those need no manual setup.
+
+## 🚀 Usage
+
+```bash
+python main.py --list                              # the available experiments
+python main.py experiment=jitter_sweep             # run one, exactly as recorded
+python main.py experiment=jitter_sweep repeats=1   # override any setting
+python main.py experiment=jitter_sweep -- --help   # the study's own options
+
+sbatch script/run_jitter.sbatch                    # the same, as a cluster job
+```
+
+An experiment is one file in [`configs/experiments/`](configs/experiments/); its settings become
+the command-line arguments of the study that runs it, so a result can be reproduced from its name
+alone. The studies keep their own interfaces, so `python src/jitter_study.py --ply … --jitters …`
+still works and the two paths cannot drift apart.
+
+| experiment | what it measures | cost |
 |---|---|---|
-| **Paragram + conversion** | Paragram (GPU Voronoi adjacency, float32) → exact CPU repair of failed / hull cells (`paragram_repair.py`) → 4-clique + insphere conversion to tetrahedra (`voronoi_to_delaunay.py`) | float32 GPU, float64 conversion |
-| **gDel3D** | GPU insertion + flipping, CPU star splaying ([pyGDel3D](https://github.com/half-potato/pyGDel3D), patched) | float64, exact predicates |
-| **gStar4D** | GPU star splaying seeded by a discrete Voronoi diagram (PBA) ([gStar4D](https://github.com/ashwin/gStar4D), patched for CUDA 12) | float32 points, exact predicates |
-| **Local DeWall** | GPU Delaunay-wall construction ([Local-DeWall](https://github.com/WuhengGao/Local-DeWall), patched for Linux) | float32, exact predicates |
-| **GeoDel** | Geogram's `ParallelDelaunay3d` through a Python binding ([GeoDel](https://github.com/Anttwo/GeoDel)), CPU-parallel (OpenMP) | float64, exact predicates |
-| **CGAL parallel** | `Delaunay_triangulation_3` with `Parallel_tag` + TBB (`cgal_delaunay.cpp`), the reference | exact |
-| **CGAL sequential** | same tool with `CGAL_THREADS=1` | exact |
+| `benchmark` | correctness against CGAL on the two clouds | ~20 min |
+| `benchmark_full` | the above plus analytic surfaces and meshes (58 datasets) | ~6 h |
+| `jitter_sweep` | deformation, cost and exact-predicate rate over 7 orders of magnitude | ~50 min |
+| `scaling_tile` | time versus point count, 2k → 1M, by tiling copies | ~4 h |
+| `scaling_densify` | the same, by densifying the same volume | ~4 h |
+| `report` | Markdown report and charts from a benchmark JSON | seconds |
 
-For each dataset the script reports, per method: tetrahedron counts and set differences vs the reference
-(Jaccard), empty-circumsphere violations, volume vs convex-hull volume, Euler characteristic, manifoldness,
-volume / radius-ratio / dihedral-angle statistics, a breakdown of *why* sets differ (ties on co-spherical
-groups, zero-volume tets, missing/spurious adjacency edges), and timings averaged over repeated runs with a
-GPU / CPU split. `make_report.py` turns the JSON into a Markdown report with charts.
+## 📊 Results
 
-Datasets: the two point clouds in `data/` (≈100k points each), and optionally analytic surfaces (cube,
-hollow cube, spheres, tori, Klein bottle, Möbius strip, trefoil) and classic meshes (bunny, spot, teapot,
-cow, Suzanne, armadillo). With `--unit-cube` every dataset is normalised into the unit cube in float32 first,
-so all methods triangulate *exactly* the same points (Local DeWall and gStar4D would otherwise rescale
-internally). Those two tools do rescale and permute their input regardless, so each is compared against a
-reference computed on the point set it actually triangulated, and the report says so.
+100 000 points per cloud, jitter 1e-6, mean of 5 runs, one A100 and 8 CPU cores.
+Reproduce with `python main.py experiment=jitter_sweep`; raw data in `results/jitter/jitter.json`.
 
-## Running on Ruche (Mésocentre, SLURM)
+| method | iarpa (s) | jax (s) | vs CGAL | on the **raw** cloud |
+|---|---|---|---|---|
+| gDel3D | **0.045** | **0.046** | identical | 7.79 % exact → 0.862 s, **+48 889 tetrahedra** |
+| Local DeWall | 0.086 | 0.107 | identical | 0.260 s, −713 / +744 ties |
+| GeoDel (CPU, 8 threads) | 0.129 | 0.128 | identical | 0.134 s, identical |
+| gStar4D | 0.159 | 0.177 | identical | 4.188 s, identical |
+| CGAL parallel (8 threads) | 0.281 | 0.517 | identical | 0.400 s, identical |
+| CGAL sequential | 0.827 | 0.815 | *reference* | **0 exact fallbacks** |
+| Paragram + conversion | 1.026 | 1.214 | −6 405 / −18 374 | 0.004 % undecidable |
 
-Everything is installed into a conda environment under `$WORKDIR` (Python 3.12, CUDA 12.8 toolkit, GCC 13,
-torch cu128, CGAL headers + TBB), so nothing depends on the cluster's module versions except `anaconda3`.
+Three findings worth stating plainly:
 
-1. Connect and clone (login node):
-   ```bash
-   ssh <user>@ruche.mesocentre.universite-paris-saclay.fr
-   cd $WORKDIR && git clone https://github.com/omarbesbes/Delaunay.git && cd Delaunay
-   ```
-2. One-time setup (login node, has internet; 15–30 min, mostly downloads and CUDA compilation):
-   ```bash
-   bash setup_ruche.sh
-   ```
-   `build_tools.sh` can also be run on its own to (re)build just the standalone tools, but only with
-   the environment active — it now says so if it is not:
-   ```bash
-   module load anaconda3/2023.09-0/none-none && source activate $WORKDIR/envs/delaunay
-   export CUDA_HOME=$CONDA_PREFIX CC=x86_64-conda-linux-gnu-gcc CXX=x86_64-conda-linux-gnu-g++
-   bash build_tools.sh            # or --force to rebuild what is already there
-   GPU_ARCHS="8.0" bash build_tools.sh --force   # only the GPU of this node (faster build)
-   ```
-   It creates `$WORKDIR/envs/delaunay`, installs the Python packages, builds `bin/cgal_delaunay`
-   (parallel CGAL), installs the patched Paragram, pyGDel3D and GeoDel, builds `bin/dewall` (Local DeWall)
-   and `bin/gstar4d` (gStar4D) for V100 and A100 (`GPU_ARCHS="7.0;8.0"`), and pre-downloads the meshes. Each step prints a
-   check line; if one fails, the message says which tool is missing and the benchmark still runs without it.
-3. Submit the benchmark. **Use the A100 partition** (`gpua100`, the default in the script): the
-   `cu128` torch wheels contain no Volta (sm_70) kernels, so Paragram and gDel3D cannot run on the
-   V100 partitions with that build. To use `gpu` / `gpu_test` (V100) instead, reinstall torch with
-   Volta support first:
-   ```bash
-   TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 bash setup_ruche.sh
-   ```
-   (Local DeWall, gStar4D and CGAL are standalone binaries, and GeoDel is CPU-only, so those four run on
-   any of the partitions.)
-   ```bash
-   sbatch run_ruche.sbatch                 # the two point clouds, 10 timed repeats per method
-   FULL=1 BASELINE=0 sbatch run_ruche.sbatch  # everything: clouds + analytic surfaces + meshes,
-                                              # corrected Paragram only, with and without jitter
-   TOOL_TIMEOUT=120 sbatch run_ruche.sbatch   # allow a slow external tool 2 min (default 10 s)
-   REPEATS=5 sbatch run_ruche.sbatch
-   JITTER=0 sbatch run_ruche.sbatch           # skip the jittered pass
-   OUT=results/1832417 sbatch run_ruche.sbatch   # continue an earlier job's results
+- **Degeneracy costs more than scale.** gDel3D is 18× slower *and wrong* on the raw cloud, and
+  exact on any perturbed one. gStar4D is 24× slower on the raw cloud but always exact.
+- **CGAL never needs exact arithmetic here**, on any input including the raw clouds: its
+  semi-static filter decides all 4.4 M in-sphere evaluations. The degeneracy in this data is
+  *coplanarity*, which shows up in the orientation predicate (16 fallbacks), not co-sphericity.
+- **A small perturbation makes the triangulation well-defined, not well-conditioned.** It removes
+  the ambiguity at 1e-9 but *creates* near-flat tetrahedra (27 → 716), which only disappear at
+  1e-5. Every tetrahedron a small jitter adds is a sliver — 8 551 of 8 551.
 
-   squeue -u $USER                         # job state
-   tail -f results/delaunay-bench.o<jobid> # live progress ([HH:MM:SS] lines: dataset, method, run i/N)
-   ```
-   The job runs up to three passes, selected by `BASELINE` and `JITTER`: corrected Paragram
-   (10x clipping pad, CPU repair) with gDel3D, gStar4D, Local DeWall, GeoDel and CGAL; the upstream Paragram baseline (legacy clipping box, no repair; 3 repeats); and a jittered
-   pass (3 repeats). A method whose first run exceeds 100 s is repeated only twice.
-4. Results, in `results/<jobid>/`: `report.md` (+ PNG charts), `results*.json` (all numbers; written after
-   every dataset, so partial results survive a crash), `run*.log` (full console output).
-   Copy them back with `scp -r <user>@ruche...:$WORKDIR/Delaunay/results/<jobid> .`
+<p align="center"><img width="85%" src="./images/scaling.png"></p>
 
-Is gStar4D working at all? It is the one method that can hang (see the notes at the end), so it
-has its own check — on a GPU node, with the environment active:
-```bash
-python check_gstar4d.py --ply data/*.ply --timeout 120
-python check_gstar4d.py --ply data/*.ply --sizes 50000 --grid 256 512 --jitter 0 1e-6   # what helps?
-```
-Stage [1] runs the tool's own point generator, with none of this benchmark's code: a timeout there
-means the build or the CUDA-12 port is broken. Stages [2] and [3] go through the benchmark's runner
-and compare every tetrahedron against the reference, so a timeout only in [3] means gStar4D does
-not converge on that input. `loops` is the number of star-consistency iterations it needed.
+From 2 000 to 1 000 000 points, every method is effectively linear and its cost per point is flat.
+The exponent `alpha` of a power-law fit is meaningless for most of them — only CGAL sequential is a
+true power law (1.00 ± 2 %, 8.1 µs/point). See [`docs/scaling_study.md`](docs/scaling_study.md).
 
-Quick interactive test on a GPU node (1 h partition):
-```bash
-srun --partition=gpu_test --gres=gpu:1 --cpus-per-task=8 --mem=32G --time=00:30:00 --pty bash
-module load anaconda3/2023.09-0/none-none && source activate $WORKDIR/envs/delaunay
-export CUDA_HOME=$CONDA_PREFIX PARAGRAM_MAX_PLANES=128 PARAGRAM_MAX_VERTS=128
-python test_delaunay_surfaces.py --no-analytic --models --ply data/*.ply --unit-cube --repeats 2 --verbose \
-  --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
-  --geodel-threads $SLURM_CPUS_PER_TASK --json results/test.json
-```
+## 📓 Documentation
 
-## Scaling study: time vs number of points
+| document | what it covers |
+|---|---|
+| [`docs/jitter_sweep.md`](docs/jitter_sweep.md) | the main result: deformation, cost, exact-predicate rates |
+| [`docs/jitter_validation.md`](docs/jitter_validation.md) | why a 1e-6 perturbation is negligible for these clouds |
+| [`docs/scaling_study.md`](docs/scaling_study.md) | time versus point count, and why `alpha` misleads |
+| [`docs/upsampling_methods.md`](docs/upsampling_methods.md) | tiling versus densification, and their spacing statistics |
+| [`docs/methods.md`](docs/methods.md) | the seven implementations and every metric reported |
+| [`docs/running_on_ruche.md`](docs/running_on_ruche.md) | cluster setup, job options, troubleshooting |
+| [`docs/interpreting_results.md`](docs/interpreting_results.md) | what each metric means and how to read it |
+| [`docs/presentation_3min.md`](docs/presentation_3min.md) | a 3-minute talk on the project |
 
-`scaling_study.py` answers a different question from the benchmark: not "is it correct" but "how
-does the time grow with N", for the two point clouds only, with and without jitter. It measures
-time only -- no reference triangulation, no metrics -- and writes one record per
-(cloud, size, jitter, method) measurement.
+## 🧪 Tests
 
 ```bash
-sbatch run_scaling.sbatch                                    # the default sweep, ~29 sizes
-SIZES="2000:200000:10000 200000" sbatch run_scaling.sbatch    # only real subsamples, no tiling
-CLOUD=data/voronoi_jax_068.ply REPEATS=1 sbatch run_scaling.sbatch
-python scaling_study.py --plot-only results/scaling-<jobid>/scaling.json --plot mine.png
+pip install -r dev_requirements.txt
+pytest                      # 27 tests, no GPU and no torch needed
+pre-commit run --all-files  # ruff, docformatter, prettier, large-file check
 ```
 
-Outputs:
+The tests check that every experiment config names a valid study and that each option it generates
+exists in that study's `argparse` — parsed statically, so a broken config fails on a laptop in
+0.3 s instead of three hours into a cluster job. `tests/test_converter.py` checks the
+Voronoi-to-Delaunay conversion against Qhull and is skipped where torch is absent.
 
-* `scaling.png` -- log-log, one panel per cloud, solid without jitter and dashed with it, the fitted
-  exponent alpha of *t ~ N^alpha* in the legend.
-* `scaling_breakdown_<cloud>.png` -- **where the time goes as N grows**. Where a method's own
-  timers do not add up to the wall clock, the difference is drawn as a grey band: gDel3D reports
-  phase timers for its algorithm only, so allocating its device buffers (sized by n) and uploading
-  the points fall outside them -- 4 % of the wall time at 2k rising to 36 % at 1M. Paragram, Local
-  DeWall and gStar4D have no such gap, since their reported phases cover the whole measurement. one row per jitter, a
-  left-hand panel with each method's CPU share, then one stacked panel per method. Paragram is
-  broken into its three phases (GPU adjacency, GPU 4-clique conversion, CPU exact repair); the
-  others into GPU and CPU totals, with the command-line tools' file exchange drawn as a dotted line
-  (measured, excluded from the total).
-* `scaling.csv` -- one row per measurement with `gpu`, `cpu`, `io`, `adjacency`, `repair`,
-  `conversion` and the tetrahedron count, for your own plots and fits.
-* `scaling.json` -- rewritten after every measurement, so a job that is cut short still leaves a
-  usable curve.
+## 🚧 What is not done
 
-Two things to know about the sizes:
+- **Paragram never matches CGAL**, at any jitter, missing 6 405–18 374 tetrahedra. The error tracks
+  the *sliver count* rather than the degeneracy, so we believe it is a float32 resolution limit in
+  the Voronoi cell clipping rather than something a perturbation can fix — but we have not verified
+  that, and it is the obvious next experiment.
+- **GeoDel, Local DeWall and gStar4D report no predicate counters.** GeoDel would need a
+  `PCK_STATS` build of Geogram (~2× slower); the other two have no exact fallback to count. Those
+  cells above are honest gaps, not zeros.
+- **Local DeWall's spike at 800 000 points** lives entirely in post-processing (3 607 ms of
+  3 873 ms) with identical post-point counts and clean status counters. The root cause is still
+  open; it needs an `OUTPUT_INFORMATION` rebuild to get per-point cycle counts.
+- **Our description of Local DeWall's parallel strategy** is inferred from its status counters and
+  memory layout, not read from the paper. Treat it as provisional.
 
-* **Two ways to exceed the cloud's own point count** (`--upsample`, `UPSAMPLE=`), because the clouds
-  hold ~100k points each and the sweep goes to 1M:
-  * `tile` (default) -- **more area, same resolution**: the tiling described below.
-  * `densify` -- **same area, more resolution**: the cloud is triangulated once, and each new point
-    picks one of its Delaunay tetrahedra **uniformly** and takes a Dirichlet(1,1,1,1) convex
-    combination of its four vertices (uniform inside that tetrahedron). Two choices, both measured
-    at 4x the points on a 20k subsample against the ideal cube-root spacing ratio of 1.59:
-    | variant | spacing ratio | new points >3 spacings from a real one |
-    |---|---|---|
-    | volume-weighted tetrahedra | 1.02 | 39.9 % |
-    | point + 3 nearest neighbours | 3.53 | (6 % within 0.2 spacings: manufactured close pairs) |
-    | uniform per tetrahedron, no filter | 1.62 | 2.6 % |
-    | uniform per tetrahedron, circumradius <= 3 spacings | 1.82 | 0 % |
-    | **uniform per tetrahedron, circumradius <= 4 spacings** | **1.72** | **0.15 %** |
-    Volume weighting fails because Delaunay fills the convex hull and 63 % of its tetrahedra carry
-    96 % of the volume, so the new points pour into the voids. Tetrahedra built from a point and
-    its nearest neighbours fail because they are anchored on existing points, so new points pile up
-    next to old ones. `--max-circumradius` trades the two defects against each other -- a tighter cap
-    keeps points near real ones but concentrates them where the cloud is already dense, no cap
-    gets the density law nearly exact but puts 2.6 % of points in empty space -- and the default
-    of 4 is the knee. **Tetrahedra per point is 6.55-6.59 for every setting including no filter**,
-    so the workload measured is the same either way. Edge length is a poor criterion by
-    comparison, discarding 63 % of the tetrahedra and over-tightening by 70 %.
-    The interpolation is volumetric rather than a tangent-plane resampling because these clouds are
-    not surfaces: 78 % of 13-point neighbourhoods are isotropic blobs and under 1 % are planar.
-    Tetrahedra per point holds at 6.5-6.6 from 1x to 10x density.
-* **The tiling** (`--upsample tile`): the cloud is replicated on a k x k x k lattice
-  of translated copies, so the point spacing -- and with it the local structure and the
-  degeneracies -- is preserved while the extent grows, and the requested number of points is drawn
-  from that lattice (1M points = 27 copies). Every record says how many tiles were used and the
-  plot marks where tiling starts. A tiled input is a fair scaling load but not the same
-  distribution as the real cloud, so read the two regimes separately.
-* A method is dropped from larger sizes once it exceeds `--skip-above` (default 60 s), since that
-  is monotone, or after `--give-up-after` (default 3) *consecutive* failures -- a single crash or
-  timeout is input-specific, not a size limit, so the curve continues past it. That keeps CGAL sequential and Paragram's
-  global-CGAL repair from consuming the whole job at 1M points.
-* **gDel3D is measured in a separate interpreter with a wall-clock limit** (`--isolate gdel3d
-  --measure-timeout 300`), because it has failed in all three ways that cannot be caught in
-  process: a segfault at 22k points, an abort on `torus-random`, and a 13-minute hang at 42k that
-  blocked every method queued behind it. Each such failure now costs one measurement. Both jobs
-  additionally wrap every attempt in `timeout` (`ATTEMPT_TIMEOUT`, `PASS_TIMEOUT`) as a backstop.
-* **Each method sweeps in its own process** (`scaling-<method>.json`, merged for the plot), because
-  a library can crash the interpreter rather than raise: gDel3D has been seen to segfault on a
-  22k-point subsample after handling 2k, 12k and 100k fine. Every measurement is marked in the
-  JSON before it starts, so the automatic restart (`--resume`, up to `ATTEMPTS=4` per method)
-  records the input that killed the process as failed and carries on with the next size instead of
-  running into it again. To rebuild the diagram from whatever finished:
-  `python scaling_study.py --plot-only results/scaling-<jobid>/scaling-*.json --plot mine.png`.
+## 📝 Citing our work
 
-## Jitter study: what the perturbation costs and buys
-
-The benchmark perturbs the LiDAR clouds because their points sit on a sensor grid, which makes
-large groups of them exactly co-spherical: the Delaunay triangulation is then not unique and
-several methods return overlapping tetrahedra or fail outright. `jitter_study.py` sweeps the size
-of that perturbation on the two point clouds only, and records, for every value:
-
-* **how much it deforms the cloud** — displacement in absolute terms and as a fraction of the local
-  point spacing, convex-hull volume change, points whose nearest neighbour changed, exact
-  duplicates removed, and what happened to the reference triangulation (tetrahedra, slivers, flat
-  tetrahedra);
-* **what each method costs** — seconds, and its tetrahedra against a CGAL reference on the same
-  perturbed points;
-* **how often the in-sphere predicate falls back to exact arithmetic.** A robust implementation
-  evaluates the test in floating point with an error bound and redoes it exactly only when the
-  bound says the sign is not trustworthy. Degeneracy is exactly what makes that filter fail, so
-  this is the number that says whether a jitter removed the degeneracy or only hid it.
-
-| method | counter | how |
-|---|---|---|
-| gDel3D | `doInSphereFast` vs `doInSphereSoS` | `patch_pygdel3d.py` adds three slots to `_counterVec` and to `Statistics`, read once per flipping loop (one register increment per test, one atomic per block) |
-| CGAL | filtered-predicate calls vs filter failures | `-DCGAL_PROFILE` build `bin/cgal_delaunay_profile`, run untimed and single-threaded so the counts are reproducible |
-| Paragram + conversion | in-sphere determinants inside the float64 rounding-error bound | `voronoi_to_delaunay.last_insphere_stats()`; there is no exact fallback, so these are tests it cannot decide at all |
-| GeoDel | — | would need a `PCK_STATS` build of Geogram, which the wheel is not built with |
-| Local DeWall, gStar4D | — | no exact fallback to count |
-
-```bash
-sbatch run_jitter.sbatch                                     # 0, 1e-9 .. 1e-3 on both clouds
-JITTERS="0 1e-8 1e-6 1e-4" REPEATS=1 sbatch run_jitter.sbatch
-CLOUD=data/voronoi_jax_068.ply sbatch run_jitter.sbatch
-python jitter_study.py --plot-only results/jitter-<jobid>/jitter.json \
-    --markdown mine.md --plot mine.png
+```bibtex
+@misc{besbes_delaunaybench_2026,
+  title  = {DelaunayBench: GPU Delaunay triangulation on degenerate point clouds},
+  author = {Besbes, Omar},
+  year   = {2026},
+  note   = {Student research project, CentraleSupélec},
+  url    = {https://github.com/omarbesbes/DelaunayBench}
+}
 ```
 
-`jitter_sweep.md` is the written-up analysis of the run that settled this (job 1887129): the
-deformation table, the exact-fallback measurements, and why 1e-6 is the right default.
-
-Outputs, in `results/jitter-<jobid>/`: `jitter.md` (report-ready tables), `jitter.png` (three rows
-per cloud: time, exact-predicate share, deformation), `jitter.csv`, `jitter.json`. One process per
-method, all sharing one JSON, so a library that crashes the interpreter only ends its own sweep and
-`--resume` carries on; the deformation metrics and CGAL's counters are computed by the first
-process and read back by the rest.
-
-The predicate counters need the patched builds: `bash setup_ruche.sh` (pyGDel3D) and
-`bash build_tools.sh` (`bin/cgal_delaunay_profile`). Without them the study still runs and simply
-reports no counters for those methods.
-
-## Troubleshooting (observed on Ruche)
-
-| symptom | cause | fix |
-|---|---|---|
-| `no kernel image is available for execution on the device` | the `cu128` torch wheel has kernels for sm_75/80/86/90/100/120 only, and a V100 is sm_70 | use `--partition=gpua100`, or `TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 REBUILD=1 bash setup_ruche.sh` |
-| `CUDA-capable device(s) is/are busy or unavailable` while `nvidia-smi` shows the GPU idle in Default mode | node-specific driver state | handled by `cuda_wait.sh`, which both jobs run before touching the GPU: it retries for a minute, then records the node in `results/unusable_nodes.txt` and resubmits the job with `--exclude=` (up to `RETRY_MAX=4`) |
-| `NVCC_PREPEND_FLAGS: unbound variable` | conda's `cuda-nvcc` activation script under `set -u` | handled: the scripts relax `set -u` around activation |
-| `fatal error: cuda_runtime_api.h` in torch's JIT build | conda keeps the CUDA headers in `targets/x86_64-linux/include`, which torch does not add for host code | handled: the scripts export `CPATH` / `LIBRARY_PATH` |
-| `ValueError: Unknown CUDA arch (10.1)` | torch's arch auto-detection on cu128 builds | handled: the job pins `TORCH_CUDA_ARCH_LIST` from `nvidia-smi --query-gpu=compute_cap` |
-
-`bash diagnose_gpu.sh` prints the full picture on any GPU node: device files, compute mode, which `libcuda`
-is mapped, raw `cuInit` / `cudaMalloc` error codes, a tiny `nvcc`-built CUDA program, and torch's arch list.
-
-## Options worth knowing
-
-```
---unit-cube                   same float32 points for every method (recommended)
---repeats N                   timed repetitions per method (correctness taken from run 1)
---slow-repeats 2 --slow-threshold 100   repetitions for methods slower than the threshold on run 1
---verbose                     timestamped progress on stderr
---paragram-bbox-pad 10 | -1   relative clipping pad (patched Paragram) | upstream absolute 1.0
---repair on|off, --repair-hull on|off   exact CPU repair of failed / convex-hull cells (capped at 20 % of the points)
---tool-timeout 10             kill an external tool (gStar4D, Local DeWall) after N s and report it
-                              as failed on that dataset (0 = no limit); gStar4D's star-consistency
-                              loop has no iteration cap and can spin forever on hard input, and
-                              Local DeWall needs minutes on near-co-spherical input
---gdel3d auto|on|off, --geodel auto|on|off, --geodel-threads N (0 = SLURM_CPUS_PER_TASK, else all cores)
---dewall-bin PATH, --gstar4d-bin PATH, --gstar4d-grid 512 (its PBA grid; max 512), --gstar4d-facet-max N
---cgal-bin PATH, --cgal-python PATH
---n 20000, --models ..., --ply ..., --jitter 1e-6, --adjacency auto|paragram|qhull|ref-edges
-```
-Build variants of Paragram: `PARAGRAM_MAX_PLANES` / `PARAGRAM_MAX_VERTS` (default 64; the job uses 128),
-`NO_FAST_MATH=1`. Paragram's CUDA extension is compiled on first import (a few minutes) into torch's
-extension cache; the job does a warm-up call before timing.
-
-## Files
-
-- `test_delaunay_surfaces.py` — the benchmark driver (datasets, methods, metrics, JSON).
-- `make_report.py` — Markdown report + charts from one or several JSON files.
-- `scaling_study.py`, `run_scaling.sbatch` — time vs number of points (2k .. 1M) for the two point
-  clouds, with and without jitter; log-log diagram with fitted exponents, plus CSV.
-- `jitter_study.py`, `run_jitter.sbatch` — sweep the jitter on the two point clouds: deformation,
-  per-method time and correctness, and exact vs filtered predicate counts.
-- `jitter_sweep.md` — the analysis of that sweep: why duplicate points must go first, what each
-  jitter deforms, and the exact-arithmetic fallback rates that justify sigma = 1e-6.
-- `cuda_wait.sh` — waits for a usable CUDA context, and resubmits the job excluding the node when
-  one never appears (some Ruche GPU nodes accept a job and then refuse every context).
-- `check_gstar4d.py` — smoke-test gStar4D alone: its own generator, then random clouds, then
-  subsamples of the PLY clouds, to separate a broken build from an input it cannot handle.
-- `voronoi_to_delaunay.py` — Voronoi adjacency → Delaunay tetrahedra (torch, GPU or CPU).
-- `paragram_repair.py` — exact CPU fallback for Paragram's failed / hull cells.
-- `cgal_delaunay.cpp` — parallel CGAL Delaunay command-line tool; `build_tools.sh` also
-  builds it with `-DCGAL_PROFILE` as `bin/cgal_delaunay_profile` for the predicate counts.
-- `patch_paragram.py`, `patch_pygdel3d.py`, `patch_dewall.py`, `patch_gstar4d.py` — source patches applied
-  to the upstream repositories at setup time (documented at the top of each file).
-- `setup_ruche.sh`, `run_ruche.sbatch` — cluster setup and SLURM job.
-- `data/` — the two point clouds. `third_party/`, `bin/`, `results/` are created by the setup / jobs.
-
-## Notes on interpreting results
-
-- Identical tets to CGAL is the correctness bar; "tie" differences on co-spherical groups (regular grids,
-  symmetric meshes) are legitimate; zero-volume tets (gDel3D on co-planar points) are flagged separately.
-- Paragram's known limits: float32 cell clipping fails on sliver-shaped cells (`inconsistent_boundary`),
-  loses edges silently on unbounded (hull) cells and on near-co-spherical input; the CPU repair fixes what
-  is flagged or on the hull, and the report states what fraction of cells was recomputed on the CPU.
-- **gDel3D crashes the interpreter on some inputs** -- `Aborted (core dumped)` during the warm-up
-  on `torus-random` at 20 000 points, and a segfault at 22 000 points of `voronoi_iarpa_001` in the
-  scaling sweep, both after handling the same clouds at 100 000 points. A crash inside a library is
-  not an exception, so no `except` catches it: every pass therefore runs with `--resume` and is
-  restarted up to `ATTEMPTS=4` times, which keeps the datasets already measured, records the
-  measurement that killed the process as `CRASHED`, and continues with the rest.
-- **Local DeWall allocates 7 tetrahedra per point and silently truncates beyond that.**
-  `delaunay_solver.cu` had `tet = cuVector<int4>(7 * nv)` with no bound check, so a triangulation
-  needing more came back as exactly `7*nv + 1` tetrahedra: `klein-bottle` (140 883 reference tets,
-  7.04 per point) -> 140 001, `trefoil-tube` (10.6 per point) -> 140 001, `torus-random` (11.9 per
-  point) -> 140 001, while every dataset under 7 per point (spheres 3.0, bunny 6.85, armadillo
-  6.84, the two clouds 6.7) was exact. The truncated meshes are badly broken -- 36 % of the hull
-  volume missing on `trefoil-tube`, Euler -379, only 17 017 of 20 000 points used.
-  `patch_dewall.py` raises the factor to 16 (`-DDEWALL_TETS_PER_POINT=<n>` to change it; int4 is
-  16 bytes, so 16 per point costs 256 MB at a million points), `run_dewall` reports a result that
-  sits exactly at the capacity as `TRUNCATED`, and the verdict calls it INCOMPLETE rather than a
-  tie-break -- the volume error is what separates the two, since a genuine tie difference leaves
-  the volume exactly right.
-- Local DeWall is exact but very slow on near-co-spherical input (hundreds of seconds for 20k sphere
-  points), so with the default `--tool-timeout 10` it is reported as failed on those datasets;
-  raise the limit (`TOOL_TIMEOUT=120`) if those numbers matter.
-- gStar4D is from 2013 and needs three source changes to be usable, all in `patch_gstar4d.py`: its discrete
-  Voronoi stage uses the texture-reference API, removed in CUDA 12 (replaced by `__ldg` loads through device
-  pointers, numerically identical); its PLY writer split each tetrahedron into three triangles at 6 digits
-  of precision (now one 4-index line at 9 digits, enough to identify the points exactly); and it built only
-  for `sm_35`. It is compiled with `-fmad=false`, without which the GPU-side Shewchuk predicates stop being
-  exact. It also drops duplicate points, which the benchmark reports.
-- **gStar4D needs `-g 512` on these point clouds**, which is why that is the default. Its stars are
-  seeded from a `g x g x g` voxel grid holding *one point per voxel*; the rest become "missing
-  points" that go through a slower fix-up path. Uniform points barely collide (78 of 50k at
-  g=256), but a LiDAR surface cloud is spaced far more finely along the surface than the voxel
-  size, so at g=256 it loses 4 847 of 50 000 points and then stalls *before* the first
-  star-consistency iteration. At g=512 the collisions drop to 1 100 and it finishes:
-  0.76 s at 50k, 1.53 s at 100k, differing from CGAL only by co-spherical tie-breaks
-  (Jaccard 0.9993). `g=1024` is not an option: PBA packs each coordinate into 10 bits
-  (`ENCODE(x, y, z) = (x << 20) | (y << 10) | z`, with `0x3ff` reserved as the infinity sentinel),
-  so the packed keys go negative and the run dies in a device assert -- the benchmark clamps the
-  grid to 512. `--tool-timeout` still bounds the remaining cases: a method that stalls is reported
-  as failed for that dataset and the run continues. `check_gstar4d.py` is how all of this was
-  established, and its `missing=` column is the number to watch.
-- GeoDel is the only CPU-parallel method besides CGAL, and gets the same core count as CGAL parallel
-  (`--geodel-threads $SLURM_CPUS_PER_TASK`), so the two are directly comparable.
+The methods compared are [CGAL](https://www.cgal.org/),
+[gDel3D](https://github.com/ashwin/gDel3D) (Cao et al., 2014),
+[gStar4D](https://github.com/ashwin/gStar4D) (Nanjappa, 2012),
+[Local DeWall](https://github.com/WuhengGao/Local-DeWall) (Gao & Chen, 2026),
+[GeoDel](https://github.com/Anttwo/GeoDel) (Geogram, Lévy) and Paragram.

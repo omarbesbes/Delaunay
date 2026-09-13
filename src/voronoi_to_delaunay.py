@@ -71,11 +71,11 @@ _LAST_INSPHERE: dict[str, float | int] = {}
 def last_insphere_stats() -> dict[str, float | int]:
     """Counters of the last `delaunay_from_adjacency` call:
 
-        cliques    4-cliques of the adjacency graph that reached the in-sphere test
-        tests      in-sphere determinants evaluated (one per clique per candidate 5th point)
-        uncertain  of those, how many landed inside the float64 rounding-error bound, i.e.
-                   could not be decided in double precision
-        cospherical_tets  tetrahedra kept although a 5th point sits on their circumsphere
+    cliques    4-cliques of the adjacency graph that reached the in-sphere test tests      in-
+    sphere determinants evaluated (one per clique per candidate 5th point) uncertain  of those, how
+    many landed inside the float64 rounding-error bound, i.e.            could not be decided in
+    double precision cospherical_tets  tetrahedra kept although a 5th point sits on their
+    circumsphere
     """
     return dict(_LAST_INSPHERE)
 
@@ -237,7 +237,7 @@ def delaunay_from_adjacency(
     n_uncertain = torch.zeros((), dtype=torch.long, device=dev)
 
     def triangles(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-        """a<b<c with ab, ac, bc edges (c drawn from the neighbours of a)."""
+        """A<b<c with ab, ac, bc edges (c drawn from the neighbours of a)."""
         ridx, c = _expand_neighbours(a, deg, offs, adj)
         keep = c > b[ridx]
         ridx, c = ridx[keep], c[keep]
@@ -246,7 +246,7 @@ def delaunay_from_adjacency(
         return torch.stack([a[ridx], b[ridx], c], 1)
 
     def cliques(t: torch.Tensor) -> torch.Tensor:
-        """a<b<c<d with ad, bd, cd edges (d drawn from the neighbours of a)."""
+        """A<b<c<d with ad, bd, cd edges (d drawn from the neighbours of a)."""
         ridx, d = _expand_neighbours(t[:, 0], deg, offs, adj)
         keep = d > t[ridx, 2]
         ridx, d = ridx[keep], d[keep]
@@ -257,9 +257,10 @@ def delaunay_from_adjacency(
     def empty_sphere(t: torch.Tensor) -> torch.Tensor:
         """Keep cliques whose circumsphere contains no Delaunay neighbour of a, b, c (, d).
 
-        Exact criterion (see module docstring); decided with the insphere determinant, which
-        needs no division and is far better conditioned than testing distances against a
-        computed circumcentre (slivers!)."""
+        Exact criterion (see module docstring); decided with the insphere determinant, which needs
+        no division and is far better conditioned than testing distances against a computed
+        circumcentre (slivers!).
+        """
         nonlocal n_degenerate, n_cliques, n_tests
         n_cliques += t.shape[0]
         pa, pb, pc, pd = p[t[:, 0]], p[t[:, 1]], p[t[:, 2]], p[t[:, 3]]
@@ -291,7 +292,9 @@ def delaunay_from_adjacency(
             # Rounding-error bound.  The 3x3 determinants cancel catastrophically for slivers,
             # so the bound must scale with the products of the row norms (as in Shewchuk's
             # adaptive predicates), not with the magnitude of the computed terms.
-            bound = la * nb_ * nc * nd + lb * na * nc * nd + lc * na * nb_ * nd + ld * na * nb_ * nc
+            bound = (
+                la * nb_ * nc * nd + lb * na * nc * nd + lc * na * nb_ * nd + ld * na * nb_ * nc
+            )
             inside = sgn[ridx] * insphere < -rel_tol * bound
             killed = torch.zeros(t.shape[0], dtype=torch.bool, device=dev)
             killed[ridx[inside]] = True

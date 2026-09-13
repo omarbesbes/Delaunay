@@ -274,8 +274,11 @@ CORE_EDITS = [
 
 
 def _read(path: str) -> tuple[str, str]:
-    """(text with LF endings, the file's own line ending).  Half the gDel3D sources are CRLF and
-    rewriting them with LF would turn a five-line patch into a whole-file diff."""
+    """(text with LF endings, the file's own line ending).
+
+    Half the gDel3D sources are CRLF and rewriting them with LF would turn a five-line patch into a
+    whole-file diff.
+    """
     with open(path, newline="") as f:
         raw = f.read()
     eol = "\r\n" if raw.count("\r\n") * 2 > raw.count("\n") else "\n"
@@ -350,7 +353,9 @@ def patch_bindings(repo: str) -> bool:
         print(f"{path}: patched (predicate counters added to get_stats)")
         return True
     if "get_tet_info" in src:  # patched by a much older version: start over from upstream
-        print(f"{path}: partially patched; run `git checkout -- src/gdel3d/bindings.cpp` and re-run")
+        print(
+            f"{path}: partially patched; run `git checkout -- src/gdel3d/bindings.cpp` and re-run"
+        )
         return False
     for old in (DECL, IMPL_ANCHOR, BIND, INCLUDE):
         if old not in src:

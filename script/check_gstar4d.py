@@ -34,7 +34,7 @@ import time
 
 import numpy as np
 
-import test_delaunay_surfaces as T
+import benchmark as T
 
 
 def stage1(binary: str, n: int, grid: int, timeout: float) -> bool:
@@ -57,19 +57,13 @@ def stage1(binary: str, n: int, grid: int, timeout: float) -> bool:
     )
     t0 = time.perf_counter()
     try:
-        r = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, check=False
-        )
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
-        print(
-            f"TIMEOUT after {timeout:.0f}s -> the build/port is suspect, not your data"
-        )
+        print(f"TIMEOUT after {timeout:.0f}s -> the build/port is suspect, not your data")
         return False
     secs = time.perf_counter() - t0
     if r.returncode != 0:
-        print(
-            f"EXIT {r.returncode} in {secs:.1f}s: {(r.stdout + r.stderr).strip()[-400:]}"
-        )
+        print(f"EXIT {r.returncode} in {secs:.1f}s: {(r.stdout + r.stderr).strip()[-400:]}")
         return False
     loops = re.findall(r"^Loop:\s*(\d+)\s*$", r.stdout, re.MULTILINE)
     total = re.search(r"^\s*Total Time:\s*([0-9.eE+-]+)\s*$", r.stdout, re.MULTILINE)
@@ -103,8 +97,9 @@ def case(
 
     The perturbation is derived from (seed, n, jitter), so the same case is the same point set
     on every repetition and in every grid column: a case that finishes once and hangs the next
-    time is a non-deterministic stall, not a property of that particular perturbation."""
-    if jitter > 0:  # same convention as test_delaunay_surfaces.py --jitter
+    time is a non-deterministic stall, not a property of that particular perturbation.
+    """
+    if jitter > 0:  # same convention as benchmark.py --jitter
         jrng = np.random.default_rng([seed, len(points), int(jitter * 1e12)])
         points = points + jrng.normal(
             scale=jitter * np.ptp(points, axis=0).max(), size=points.shape
@@ -138,9 +133,7 @@ def case(
                 end="",
             )
     if not runs or fail:
-        print(
-            f"FAILED: {fail if len(fail) <= 420 else fail[:210] + ' ... ' + fail[-210:]}"
-        )
+        print(f"FAILED: {fail if len(fail) <= 420 else fail[:210] + ' ... ' + fail[-210:]}")
         return False
     tets, secs, info = runs[0]
     msg = (
@@ -168,9 +161,7 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--bin", default=os.environ.get("GSTAR4D_BIN", "bin/gstar4d"))
-    ap.add_argument(
-        "--timeout", type=float, default=120.0, help="per case, seconds (default 120)"
-    )
+    ap.add_argument("--timeout", type=float, default=120.0, help="per case, seconds (default 120)")
     ap.add_argument(
         "--grid",
         type=int,
@@ -204,9 +195,7 @@ def main() -> int:
         default=[1000, 5000, 20000, 100000],
         help="point counts to try (default 1000 5000 20000 100000)",
     )
-    ap.add_argument(
-        "--ply", nargs="*", default=[], help="PLY point clouds to subsample and try"
-    )
+    ap.add_argument("--ply", nargs="*", default=[], help="PLY point clouds to subsample and try")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
         "--repeat",
@@ -215,15 +204,11 @@ def main() -> int:
         help="run each case this many times on the SAME points: 'k/N finished' distinguishes a "
         "non-deterministic stall from an input the method cannot do (default 1)",
     )
-    ap.add_argument(
-        "--no-reference", action="store_true", help="skip the comparison, time only"
-    )
+    ap.add_argument("--no-reference", action="store_true", help="skip the comparison, time only")
     args = ap.parse_args()
 
     if not os.path.exists(args.bin):
-        print(
-            f"gStar4D binary not found: {args.bin} (build it with 'bash build_tools.sh')"
-        )
+        print(f"gStar4D binary not found: {args.bin} (build it with 'bash build_tools.sh')")
         return 2
     print(
         f"binary: {os.path.abspath(args.bin)}   grids: {args.grid}   jitters: {args.jitter}   "
@@ -260,11 +245,7 @@ def main() -> int:
         for n in [s for s in args.sizes if s < len(cloud)] + [len(cloud)]:
             # the same subsample for every grid and jitter, so the columns are comparable
             srng = np.random.default_rng([args.seed, n])
-            sub = (
-                cloud
-                if n == len(cloud)
-                else cloud[srng.choice(len(cloud), n, replace=False)]
-            )
+            sub = cloud if n == len(cloud) else cloud[srng.choice(len(cloud), n, replace=False)]
             for grid in args.grid:
                 for jit in args.jitter:
                     for fm in args.facet_max:

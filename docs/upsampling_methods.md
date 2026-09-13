@@ -3,7 +3,7 @@
 The scaling study measures running time against the number of points, from 2 000 to 1 000 000.  The
 two clouds hold about 100 000 points each (99 990 and 99 981), so every size above that has to be
 manufactured.  There are two defensible ways to do it, they answer different questions, and both are
-implemented (`scaling_study.py`, `--upsample tile|densify`):
+implemented (`src/scaling_study.py`, `--upsample tile|densify`):
 
 | | **tile** | **densify** |
 |---|---|---|

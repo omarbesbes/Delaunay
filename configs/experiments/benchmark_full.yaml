@@ -1,0 +1,16 @@
+description: As `benchmark`, plus the analytic surfaces and meshes (58 datasets, hours)
+study: benchmark
+
+ply:
+  - data/voronoi_iarpa_001.ply
+  - data/voronoi_jax_068.ply
+# 20k samples of every analytic surface (sphere, torus, Klein bottle, ...) and every mesh
+n: 20000
+unit_cube: true
+jitter: 1.0e-6
+repeats: 3
+slow_repeats: 2
+slow_threshold: 100
+geodel: auto
+verbose: true
+json: results/benchmark_full/results.json

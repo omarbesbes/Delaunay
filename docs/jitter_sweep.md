@@ -2,7 +2,7 @@
 
 *Measured on Ruche (NVIDIA A100-SXM4-40GB, 8 CPU cores), job 1887129, on the two photogrammetric
 point clouds `voronoi_iarpa_001` (99 975 points) and `voronoi_jax_068` (99 962 points).
-Reproduce with `sbatch run_jitter.sbatch`; raw data in `results/jitter-1887129/`.*
+Reproduce with `sbatch script/run_jitter.sbatch`; raw data in `results/jitter-1887129/`.*
 
 The benchmark perturbs these clouds before triangulating them. This document measures what that
 perturbation actually costs and what it actually buys, by sweeping its size over seven orders of
@@ -21,7 +21,7 @@ the input is *as the algorithm sees it* — not a proxy for it.
 
 The two clouds contain exactly repeated points: 15 duplicate rows in `iarpa` and 19 in `jax`
 (22 and 26 points sitting at 7 and 7 distinct locations). A Delaunay triangulation is not defined on
-repeated points, and `test_delaunay_surfaces.py` has always dropped them
+repeated points, and `src/benchmark.py` has always dropped them
 (`np.unique(pts.astype(np.float64), axis=0)`). The first version of this sweep did not.
 
 The difference is not cosmetic. With the duplicates left in:
@@ -146,7 +146,7 @@ slivers are the enemy, the second property is the one that matters and the thres
 ## 3. Exact-arithmetic fallbacks: the central measurement
 
 Share of in-sphere evaluations that the floating-point filter could not decide, so the test had to
-be redone in exact arithmetic. Instrumentation: gDel3D via `patch_pygdel3d.py` (counts
+be redone in exact arithmetic. Instrumentation: gDel3D via `script/patch_pygdel3d.py` (counts
 `doInSphereFast` against `doInSphereSoS` on the GPU); CGAL via a `-DCGAL_PROFILE` build; Paragram's
 converter via `voronoi_to_delaunay.last_insphere_stats()`.
 

@@ -1,0 +1,17 @@
+# Tool configuration only: this repository is a benchmark, not a distributable package.
+
+[tool.ruff]
+# The sources were written at this width, and .pre-commit-config.yaml already wraps docstrings
+# at 99 (docformatter). Keeping the formatter in agreement avoids reflowing ~1000 lines.
+line-length = 99
+target-version = "py310"
+
+[tool.ruff.lint]
+# F401 (unused import) is the rule the pre-commit hook fixes automatically; E501 is left to the
+# formatter, which knows when a long line cannot be split.
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# The studies import one another by plain module name after src/ is put on the path.
+"tests/*" = ["E402"]

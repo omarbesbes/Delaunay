@@ -1,0 +1,22 @@
+description: Sweep the perturbation over seven orders of magnitude (deformation, cost, predicates)
+study: jitter
+
+ply:
+  - data/voronoi_iarpa_001.ply
+  - data/voronoi_jax_068.ply
+
+# 0 is the cloud exactly as it came off the sensor.
+jitters: [0, 1.0e-9, 1.0e-8, 1.0e-7, 1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3]
+
+methods:
+  [paragram, gdel3d, gstar4d, dewall, geodel, cgal_parallel, cgal_sequential]
+repeats: 5
+
+# Counts the in-sphere tests that fall back to exact arithmetic.  Needs the -DCGAL_PROFILE build
+# (script/build_tools.sh) and a pyGDel3D patched by script/patch_pygdel3d.py.
+cgal_profile_bin: bin/cgal_delaunay_profile
+
+json: results/jitter/jitter.json
+csv: results/jitter/jitter.csv
+markdown: results/jitter/jitter.md
+plot: results/jitter/jitter.png

@@ -1,9 +1,10 @@
 #!/bin/bash
 # Build the standalone tools if they are missing (idempotent): the parallel CGAL tool, Local DeWall
 # and gStar4D.  Requires an activated environment (conda env with nvcc, CGAL headers, TBB).
-# Usage: bash build_tools.sh [--force]
+# Usage: bash script/build_tools.sh [--force]
 set -euo pipefail
-cd "$(dirname "$0")"
+# the script lives in script/ but every path below is relative to the repository root
+cd "$(dirname "$0")/.."
 mkdir -p bin third_party
 FORCE=${1:-}
 # GPU architectures for the standalone CUDA tools, e.g. GPU_ARCHS="7.0;8.0" (V100 and A100).
@@ -24,7 +25,7 @@ if [ -n "$missing" ]; then
   echo "  module load anaconda3/2023.09-0/none-none"
   echo "  source activate \${DELAUNAY_ENV:-\$WORKDIR/envs/delaunay}"
   echo "  export CUDA_HOME=\$CONDA_PREFIX CC=x86_64-conda-linux-gnu-gcc CXX=x86_64-conda-linux-gnu-g++"
-  echo "(or run 'bash setup_ruche.sh', which activates it and calls this script)"
+  echo "(or run 'bash script/first_install.sh', which activates it and calls this script)"
   exit 1
 fi
 
@@ -50,7 +51,7 @@ echo "-- GPU architectures: $(echo $SM | tr ' ' ',')"
 
 if [ "$FORCE" = "--force" ] || [ ! -x bin/cgal_delaunay ]; then
   echo "-- building bin/cgal_delaunay (CGAL parallel, TBB)"
-  $CXX -O3 -std=c++17 -pthread -DCGAL_LINKED_WITH_TBB -I"$CONDA_PREFIX/include" cgal_delaunay.cpp \
+  $CXX -O3 -std=c++17 -pthread -DCGAL_LINKED_WITH_TBB -I"$CONDA_PREFIX/include" src/cgal_delaunay.cpp \
     -o bin/cgal_delaunay -L"$CONDA_PREFIX/lib" -Wl,-rpath,"$CONDA_PREFIX/lib" \
     -ltbb -ltbbmalloc -lgmp -lmpfr -lpthread
 else
@@ -63,7 +64,7 @@ fi
 # a separate binary: timings come from bin/cgal_delaunay, counts from this one.
 if [ "$FORCE" = "--force" ] || [ ! -x bin/cgal_delaunay_profile ]; then
   echo "-- building bin/cgal_delaunay_profile (CGAL parallel, TBB, CGAL_PROFILE)"
-  $CXX -O3 -std=c++17 -pthread -DCGAL_LINKED_WITH_TBB -DCGAL_PROFILE -I"$CONDA_PREFIX/include" cgal_delaunay.cpp \
+  $CXX -O3 -std=c++17 -pthread -DCGAL_LINKED_WITH_TBB -DCGAL_PROFILE -I"$CONDA_PREFIX/include" src/cgal_delaunay.cpp \
     -o bin/cgal_delaunay_profile -L"$CONDA_PREFIX/lib" -Wl,-rpath,"$CONDA_PREFIX/lib" \
     -ltbb -ltbbmalloc -lgmp -lmpfr -lpthread
 else
@@ -73,7 +74,7 @@ fi
 if [ "$FORCE" = "--force" ] || [ ! -x bin/dewall ]; then
   echo "-- building bin/dewall (Local DeWall, archs $GS_ARCHS)"
   [ -d third_party/Local-DeWall ] || git clone -q https://github.com/WuhengGao/Local-DeWall.git third_party/Local-DeWall
-  $PY patch_dewall.py third_party/Local-DeWall
+  $PY script/patch_dewall.py third_party/Local-DeWall
   D=third_party/Local-DeWall
   nvcc -O3 -std=c++17 -rdc=true -I$D/include $GENCODE -Xcompiler -fopenmp \
     -diag-suppress 20054,68 \
@@ -91,7 +92,7 @@ if [ "$FORCE" = "--force" ] || [ ! -x bin/gstar4d ]; then
   # --build --run compiles predicates.c as C, then everything else with nvcc, echoing both
   # commands and checking each output file (no shell in between: the login node's BASH_ENV
   # sources the module system, which does not survive a piped-and-traced script)
-  $PY patch_gstar4d.py third_party/gStar4D --build --run --arch="$GS_ARCHS" \
+  $PY script/patch_gstar4d.py third_party/gStar4D --build --run --arch="$GS_ARCHS" \
     --out=bin/gstar4d --cc="${CC:-cc}"
 else
   echo "-- bin/gstar4d present"

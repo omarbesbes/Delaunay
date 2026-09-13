@@ -1,0 +1,9 @@
+description: Markdown report and charts from the benchmark JSONs
+study: report
+
+# make_report.py takes the main results JSON as a positional argument.
+_extra: [results/benchmark/results.json]
+
+# Optional companion passes of the same run, put side by side in the report.
+jitter: results/benchmark/results_jitter.json
+output: results/benchmark/report.md

@@ -2,6 +2,12 @@ numpy
 scipy
 matplotlib
 certifi
-cgal          # official CGAL Python bindings (wheels for Python 3.8-3.12) - fallback reference only
-# GeoDel (Geogram ParallelDelaunay3d, CPU-parallel) - compiled from source, see setup_ruche.sh:
-#   pip install "geodel @ git+https://github.com/Anttwo/GeoDel@v0.1.0"
+PyYAML        # configs/*.yaml; main.py falls back to a tiny parser without it
+cgal          # official CGAL Python bindings - fallback reference only, the compiled
+              # bin/cgal_delaunay is preferred (script/build_tools.sh)
+
+# Not on PyPI, installed from source by script/first_install.sh:
+#   torch                 CUDA build matching the cluster's driver
+#   paragram              patched by script/patch_paragram.py
+#   gdel3d (pyGDel3D)     patched by script/patch_pygdel3d.py
+#   geodel                pip install "geodel @ git+https://github.com/Anttwo/GeoDel@v0.1.0"

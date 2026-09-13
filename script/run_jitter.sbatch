@@ -12,11 +12,11 @@
 # Sweep the size of the jitter on the two point clouds only, and record for every value:
 #   how much it deforms the cloud, what each method costs, and how often each method's in-sphere
 #   predicate has to fall back to exact arithmetic.
-# Usage:  sbatch run_jitter.sbatch
-#         JITTERS="0 1e-8 1e-6 1e-4" sbatch run_jitter.sbatch
-#         CLOUD=data/voronoi_jax_068.ply sbatch run_jitter.sbatch       (one cloud, half the time)
-#         METHODS="gdel3d cgal_sequential" sbatch run_jitter.sbatch
-#         REPEATS=1 sbatch run_jitter.sbatch                            (quick pass)
+# Usage:  sbatch script/run_jitter.sbatch
+#         JITTERS="0 1e-8 1e-6 1e-4" sbatch script/run_jitter.sbatch
+#         CLOUD=data/voronoi_jax_068.ply sbatch script/run_jitter.sbatch       (one cloud, half the time)
+#         METHODS="gdel3d cgal_sequential" sbatch script/run_jitter.sbatch
+#         REPEATS=1 sbatch script/run_jitter.sbatch                            (quick pass)
 #
 # The predicate counters need the patched builds.  The job checks for them and repairs what it can:
 # it rebuilds bin/cgal_delaunay_profile if missing, and re-patches and reinstalls pyGDel3D if its
@@ -37,6 +37,8 @@ export CC=${CC:-x86_64-conda-linux-gnu-gcc} CXX=${CXX:-x86_64-conda-linux-gnu-g+
 export PARAGRAM_MAX_PLANES=128 PARAGRAM_MAX_VERTS=128
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+# the studies live in src/ and import one another by plain module name
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 CUDA_TARGET=$CONDA_PREFIX/targets/x86_64-linux
 [ -d "$CUDA_TARGET/include" ] && export CPATH="$CUDA_TARGET/include${CPATH:+:$CPATH}"
 [ -d "$CUDA_TARGET/lib" ] && export LIBRARY_PATH="$CUDA_TARGET/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
@@ -57,7 +59,7 @@ mkdir -p "$OUT"
 # Some nodes accept the job and then refuse every CUDA context: wait, and if it stays broken,
 # record the node and resubmit excluding it (see cuda_wait.sh).
 echo "== CUDA readiness"
-bash cuda_wait.sh run_jitter.sbatch || exit 1
+bash script/cuda_wait.sh script/run_jitter.sbatch || exit 1
 
 JITTERS=${JITTERS:-"0 1e-9 1e-8 1e-7 1e-6 1e-5 1e-4 1e-3"}
 CLOUD=${CLOUD:-"data/voronoi_iarpa_001.ply data/voronoi_jax_068.ply"}
@@ -68,7 +70,7 @@ GSTAR4D_GRID=${GSTAR4D_GRID:-512}
 
 # bin/cgal_delaunay_profile is a -DCGAL_PROFILE build of the same tool; without it CGAL reports
 # no predicate counters.  Cheap to build, so do it here if it is missing.
-[ -x bin/cgal_delaunay_profile ] || bash build_tools.sh
+[ -x bin/cgal_delaunay_profile ] || bash script/build_tools.sh
 
 # gDel3D's counters live in its Statistics struct, so a pyGDel3D built before patch_pygdel3d.py
 # grew them still has get_stats() -- the missing keys only show up at run time.  Check by running
@@ -77,7 +79,7 @@ echo "== predicate counters"
 probe() {
   python - 2>/dev/null <<'PY' | grep -c "GDEL3D_COUNTERS yes" || true
 import numpy as np
-import test_delaunay_surfaces as T
+import benchmark as T
 _, _, info = T.run_gdel3d(np.random.default_rng(0).random((1000, 3)))
 print("GDEL3D_COUNTERS", "yes" if info.get("predicate_total") else "no")
 PY
@@ -86,11 +88,11 @@ if [ "$(probe)" = "1" ]; then
   echo "   gDel3D  : yes"
 elif [ "${AUTOFIX:-1}" = "1" ]; then
   echo "   gDel3D  : missing -- re-patching and rebuilding pyGDel3D (a few minutes)"
-  python patch_pygdel3d.py third_party/pyGDel3D
+  python script/patch_pygdel3d.py third_party/pyGDel3D
   pip install -q --force-reinstall --no-build-isolation --no-deps third_party/pyGDel3D
   echo "   gDel3D  : $([ "$(probe)" = "1" ] && echo yes || echo "STILL MISSING -- continuing without them")"
 else
-  echo "   gDel3D  : missing (AUTOFIX=0; run 'python patch_pygdel3d.py third_party/pyGDel3D' and reinstall it)"
+  echo "   gDel3D  : missing (AUTOFIX=0; run 'python script/patch_pygdel3d.py third_party/pyGDel3D' and reinstall it)"
 fi
 python - <<'PY'
 import os
@@ -115,7 +117,7 @@ for m in $METHODS; do
   for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "-- $m (attempt $attempt/$ATTEMPTS)"
     rc=0
-    timeout "$ATTEMPT_TIMEOUT" python jitter_study.py --ply $CLOUD --jitters $JITTERS \
+    timeout "$ATTEMPT_TIMEOUT" python main.py experiment=jitter_sweep -- --ply $CLOUD --jitters $JITTERS \
       --methods "$m" --repeats "$REPEATS" --threads "$SLURM_CPUS_PER_TASK" --resume \
       --tool-timeout "$TOOL_TIMEOUT" --gstar4d-grid "$GSTAR4D_GRID" \
       --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
@@ -127,7 +129,7 @@ for m in $METHODS; do
 done
 
 echo "== tables and plot"
-python jitter_study.py --plot-only "$JSON" \
+python main.py experiment=jitter_sweep -- --plot-only "$JSON" \
   --csv "$OUT/jitter.csv" --markdown "$OUT/jitter.md" --plot "$OUT/jitter.png" \
   2>&1 | tee "$OUT/jitter-report.log"
 echo "== done: $OUT/jitter.md, jitter.png, jitter.csv, jitter.json"

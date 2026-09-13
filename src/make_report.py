@@ -1,4 +1,4 @@
-"""Turn the JSON written by `test_delaunay_surfaces.py --json` into a Markdown report with charts.
+"""Turn the JSON written by `benchmark.py --json` into a Markdown report with charts.
 
     python make_report.py results.json -o report.md
     python make_report.py results.json --baseline results_baseline.json --jitter results_jitter.json -o report.md
@@ -50,9 +50,7 @@ def load(path):
     env = data.pop("_env", {})
     for k in [k for k in data if k.startswith("_")]:
         del data[k]  # bookkeeping keys such as _in_progress, written by --resume
-    for (
-        r
-    ) in data.values():  # accept files written before the rename "ours" -> "paragram"
+    for r in data.values():  # accept files written before the rename "ours" -> "paragram"
         if PRIMARY not in r and "ours" in r:
             r[PRIMARY] = r["ours"]
         c = r.get("compare", {})
@@ -146,11 +144,7 @@ def method_verdict(row, m: str) -> str:
     ):
         return f"TIE-BREAK ({c['ref_only']} ref-only / {c['method_only']} extra)"
     if c["ref_only"] and g["volume_rel_err"] >= 1e-6:
-        pct = (
-            100 * (1.0 - g["total_volume"] / g["hull_volume"])
-            if g["hull_volume"]
-            else 0.0
-        )
+        pct = 100 * (1.0 - g["total_volume"] / g["hull_volume"]) if g["hull_volume"] else 0.0
         return (
             f"INCOMPLETE ({c['ref_only']} tets missing, {pct:.1f}% of the hull volume, "
             f"Euler {g['euler']})"
@@ -179,8 +173,11 @@ def f(v, nd=3):
 
 
 def method_seconds(r, m):
-    """Mean total (GPU + CPU) per run.  primary(r)["seconds"] is already the total, so the
-    adjacency phase must not be added to it again."""
+    """Mean total (GPU + CPU) per run.
+
+    primary(r)["seconds"] is already the total, so the adjacency phase must not be added to it
+    again.
+    """
     if m == PRIMARY:
         t = (r.get("timing") or {}).get("paragram") or {}
         return t.get("mean", primary(r)["seconds"])
@@ -199,7 +196,9 @@ def summary_table(data) -> str:
         "| vol err Paragram | vol err ref | Euler Paragram/ref | non-manifold faces | failed cells | cells repaired on CPU | verdict |"
     )
     for _, lab in ex:
-        hdr += f" tets {lab} | {lab}-only | ref-only | viol {lab} | vol err {lab} | verdict {lab} |"
+        hdr += (
+            f" tets {lab} | {lab}-only | ref-only | viol {lab} | vol err {lab} | verdict {lab} |"
+        )
     rows = [hdr, "|" + "---|" * (16 + 6 * len(ex))]
     for name, r in data.items():
         o, rf, c = primary(r), r["ref"], r["compare"]
@@ -226,9 +225,7 @@ def summary_table(data) -> str:
 
 def timing_table(data) -> str:
     ex = methods_present(data)
-    seq = any(
-        "sequential_seconds" in (r.get("reference_info") or {}) for r in data.values()
-    )
+    seq = any("sequential_seconds" in (r.get("reference_info") or {}) for r in data.values())
     hdr = (
         "| dataset | N | adjacency (GPU, s) | repair (CPU, s) | voronoi→delaunay (GPU, s) | Paragram total (s) "
         "| reference (s) | speed-up vs ref |"
@@ -418,11 +415,7 @@ def method_time(r, m):
 
 
 def timed_methods(data):
-    return [
-        m
-        for m in SPEED_ORDER
-        if any(method_time(r, m) is not None for r in data.values())
-    ]
+    return [m for m in SPEED_ORDER if any(method_time(r, m) is not None for r in data.values())]
 
 
 def output_methods(data):
@@ -453,9 +446,7 @@ def short_status(r, m) -> str:
             err = r[f"{m}_error"]
             if "did not finish within" in err:
                 return "timeout"
-            return (
-                "**crashed**" if ("assert" in err or "exit code" in err) else "failed"
-            )
+            return "**crashed**" if ("assert" in err or "exit code" in err) else "failed"
         v, c = method_verdict(r, m), r[f"compare_{m}"]
     if v.startswith("IDENTICAL"):
         return "**identical**" + note
@@ -483,13 +474,9 @@ def scoreboard(data) -> str:
         times = [t for t in (method_time(r, m) for r in data.values()) if t is not None]
         med = statistics.median(times) if times else None
         refs = [
-            method_time(r, "cgal_parallel")
-            for r in data.values()
-            if method_time(r, m) is not None
+            method_time(r, "cgal_parallel") for r in data.values() if method_time(r, m) is not None
         ]
-        ratios = [
-            a / b for a, b in zip(refs, times) if a is not None and b not in (None, 0)
-        ]
+        ratios = [a / b for a, b in zip(refs, times) if a is not None and b not in (None, 0)]
         speed = (
             f"**{statistics.median(ratios):.1f}x faster**"
             if ratios and statistics.median(ratios) >= 1.05
@@ -499,29 +486,20 @@ def scoreboard(data) -> str:
         )
         if m in REFERENCE_KEYS:
             match, why = (
-                ("reference", "-")
-                if m == "cgal_parallel"
-                else ("same as CGAL parallel", "-")
+                ("reference", "-") if m == "cgal_parallel" else ("same as CGAL parallel", "-")
             )
             rows.append(
                 f"| {SHORT_LABELS[m]} | {len(times)} / {len(data)} | {match} | {f(med)} | "
                 f"{speed if m != 'cgal_parallel' else '-'} | {why} |"
             )
             continue
-        stats = {
-            n: short_status(r, m)
-            for n, r in data.items()
-            if m in r or f"{m}_error" in r
-        }
+        stats = {n: short_status(r, m) for n, r in data.items() if m in r or f"{m}_error" in r}
         n_id = sum(x == "**identical**" for x in stats.values())
         # A tie difference is not a defect: count only the datasets where tetrahedra are really
         # missing or really wrong, and mention ties separately.
-        holed = [
-            n for n, x in stats.items() if x.startswith(("-", "**wrong**", "differs"))
-        ]
+        holed = [n for n, x in stats.items() if x.startswith(("-", "**wrong**", "differs"))]
         missing = sum(
-            data[n][f"compare_{m}" if m != PRIMARY else "compare"]["ref_only"]
-            for n in holed
+            data[n][f"compare_{m}" if m != PRIMARY else "compare"]["ref_only"] for n in holed
         )
         tied = [n for n, x in stats.items() if x.startswith("ties")]
         failed = [n for n, x in stats.items() if x.startswith(("timeout", "failed"))]
@@ -545,10 +523,7 @@ def scoreboard(data) -> str:
         if viol:
             why.append(f"**{viol} empty-sphere violations**")
         if m == PRIMARY:
-            fracs = [
-                (r.get("repair") or {}).get("repaired_fraction", 0.0)
-                for r in data.values()
-            ]
+            fracs = [(r.get("repair") or {}).get("repaired_fraction", 0.0) for r in data.values()]
             if fracs and statistics.median(fracs) >= 0.05:
                 why.append(
                     f"median {100 * statistics.median(fracs):.0f}% of cells recomputed exactly "
@@ -572,9 +547,7 @@ def correctness_overview(data) -> str:
     ]
     for name, r in data.items():
         cells = [short_status(r, m) for m, _ in ms]
-        rows.append(
-            f"| {name} | {r['n']} | {r['ref']['tets']} | " + " | ".join(cells) + " |"
-        )
+        rows.append(f"| {name} | {r['n']} | {r['ref']['tets']} | " + " | ".join(cells) + " |")
     return "\n".join(rows)
 
 
@@ -637,8 +610,7 @@ def takeaways(data, jdata=None) -> list[str]:
         holed = [
             n
             for n, r in data.items()
-            if PRIMARY in r
-            and short_status(r, PRIMARY).startswith(("-", "**wrong**", "differs"))
+            if PRIMARY in r and short_status(r, PRIMARY).startswith(("-", "**wrong**", "differs"))
         ]
         miss = sum(data[n]["compare"]["ref_only"] for n in holed)
         bad = len(holed)
@@ -856,17 +828,12 @@ def charts(data, stem: str) -> list[str]:
     ref = ref_name(data)
 
     fig, ax = plt.subplots(figsize=(max(6, 0.7 * len(names)), 3.4))
-    series = [
-        ("Paragram", [data[n]["compare"]["jaccard"] for n in names], COLORS[PRIMARY])
-    ]
+    series = [("Paragram", [data[n]["compare"]["jaccard"] for n in names], COLORS[PRIMARY])]
     for m, lab in ex:
         series.append(
             (
                 lab,
-                [
-                    data[n][f"compare_{m}"]["jaccard"] if m in data[n] else 0
-                    for n in names
-                ],
+                [data[n][f"compare_{m}"]["jaccard"] if m in data[n] else 0 for n in names],
                 COLORS[m],
             )
         )
@@ -910,9 +877,7 @@ def charts(data, stem: str) -> list[str]:
     plt.close(fig)
 
     fig, axes = plt.subplots(1, 2, figsize=(max(8, 1.1 * len(names)), 3.4))
-    sides = [("Paragram", PRIMARY, COLORS[PRIMARY])] + [
-        (lab, m, COLORS[m]) for m, lab in ex
-    ]
+    sides = [("Paragram", PRIMARY, COLORS[PRIMARY])] + [(lab, m, COLORS[m]) for m, lab in ex]
     sides.append((ref, "ref", COLORS["ref"]))
     for ax, key, label in (
         (axes[0], "radius_ratio_mean", "mean radius ratio (1 = regular)"),
@@ -948,9 +913,7 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("results")
-    ap.add_argument(
-        "--jitter", default=None, help="optional results JSON from a --jitter run"
-    )
+    ap.add_argument("--jitter", default=None, help="optional results JSON from a --jitter run")
     ap.add_argument(
         "--baseline",
         default=None,
@@ -977,17 +940,9 @@ def main():
     if "paragram_bbox_pad" in env:
         settings = (
             f" Paragram settings: clipping pad = {pad}x extent"
-            + (
-                " (legacy +1.0 absolute)"
-                if (pad if pad is not None else -1) < 0
-                else ""
-            )
+            + (" (legacy +1.0 absolute)" if (pad if pad is not None else -1) < 0 else "")
             + f", failed-cell repair {env.get('repair')}"
-            + (
-                f" (hull cells {env.get('repair_hull')})"
-                if env.get("repair_hull")
-                else ""
-            )
+            + (f" (hull cells {env.get('repair_hull')})" if env.get("repair_hull") else "")
             + (
                 f", cell budget {env.get('paragram_max_planes')} planes / {env.get('paragram_max_verts')} vertices."
                 if env.get("paragram_max_planes")
@@ -1119,9 +1074,7 @@ def main():
                         f"{info.get('max_threads', '?')}, all CPU"
                     )
                 if m == "dewall":
-                    st = ", ".join(
-                        f"{k}={v}" for k, v in (info.get("status") or {}).items()
-                    )
+                    st = ", ".join(f"{k}={v}" for k, v in (info.get("status") or {}).items())
                     extra = f", gpu {info.get('gpu_seconds', float('nan')):.3f}s" + (
                         f", status {st}" if st else ""
                     )

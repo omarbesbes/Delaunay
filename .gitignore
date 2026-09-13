@@ -1,7 +1,55 @@
+# --- this project -----------------------------------------------------------------------
+# Cloned upstream sources (paragram, pyGDel3D, Local-DeWall, gStar4D): script/first_install.sh
+# fetches and patches them, so they are reproducible rather than vendored.
 third_party/
+# Compiled tools, built by script/build_tools.sh
 bin/
+# Run outputs: JSON, CSV, logs and figures produced by a job.  The figures kept for the README
+# are copied into images/ by hand.
 results/
+outputs/
+
+# The two point clouds are small and essential to reproduce the results, so they are tracked
+# even though data/ is ignored by default.
+data/*
+!data/*.ply
+
+# --- python -----------------------------------------------------------------------------
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.Python
+build/
+dist/
+.eggs/
+
+# --- tooling ----------------------------------------------------------------------------
+# prettier (a pre-commit hook) drops a node_modules cache into the repository
+node_modules/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ipynb_checkpoints
+
+# --- environments -------------------------------------------------------------------------
+.venv/
+venv*/
+env/
+ENV/
+.python-version
+
+# --- editors and OS ------------------------------------------------------------------------
+.vscode/
+.idea/
+*.code-workspace
+.DS_Store
+
+# --- build leftovers -----------------------------------------------------------------------
 *.o
 *.tmp
+*.log

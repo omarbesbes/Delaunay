@@ -1,0 +1,25 @@
+description: Time versus number of points, growing the cloud by tiling translated copies
+study: scaling
+
+ply:
+  - data/voronoi_iarpa_001.ply
+  - data/voronoi_jax_068.ply
+
+# 2k..200k are subsamples of the cloud itself; beyond its ~100k points the cloud is grown.
+sizes: ["2000:200000:10000", "200000", "300000:1000000:100000"]
+
+# tile = more area at the same resolution (translated copies on a rectangular lattice).
+upsample: tile
+
+jitter: [0, 1.0e-6]
+methods:
+  [paragram, gdel3d, gstar4d, dewall, geodel, cgal_parallel, cgal_sequential]
+repeats: 3
+
+# gDel3D has hung for 13 minutes on some inputs; each isolated measurement is bounded.
+measure_timeout: 300
+resume: true
+
+json: results/scaling_tile/scaling.json
+csv: results/scaling_tile/scaling.csv
+plot: results/scaling_tile/scaling.png

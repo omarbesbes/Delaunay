@@ -127,11 +127,7 @@ def patch(root: str) -> bool:
         if changed:
             with open(path, "w") as f:
                 f.write(src)
-        print(
-            f"{rel}: {changed} edit(s) applied"
-            if changed
-            else f"{rel}: already patched"
-        )
+        print(f"{rel}: {changed} edit(s) applied" if changed else f"{rel}: already patched")
     return ok
 
 
@@ -140,8 +136,6 @@ if __name__ == "__main__":
     root = args[0] if args else "Local-DeWall"
     good = patch(root)
     if "--build" in sys.argv:
-        arch = next(
-            (a.split("=", 1)[1] for a in sys.argv if a.startswith("--arch=")), "75"
-        )
+        arch = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--arch=")), "75")
         print(build_command(root, arch))
     sys.exit(0 if good else 1)

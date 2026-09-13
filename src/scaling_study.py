@@ -1,24 +1,23 @@
 """How does each method's running time scale with the number of points?
 
-    python scaling_study.py --ply data/*.ply --json results/scaling.json --plot scaling.png
-    python scaling_study.py --plot-only results/scaling.json --plot scaling.png
+python scaling_study.py --ply data/*.ply --json results/scaling.json --plot scaling.png python
+scaling_study.py --plot-only results/scaling.json --plot scaling.png
 
-Measures *time only* -- correctness is what test_delaunay_surfaces.py is for -- so no reference
-triangulation is computed unless CGAL is one of the methods being timed.  For every
-(point cloud, size, jitter, method) it does one untimed warm-up run and then `--repeats` timed
-runs, and writes one record per measurement to the JSON after every size, so a job that is cut
-short still leaves a usable curve.
+Measures *time only* -- correctness is what benchmark.py is for -- so no reference triangulation is
+computed unless CGAL is one of the methods being timed.  For every (point cloud, size, jitter,
+method) it does one untimed warm-up run and then `--repeats` timed runs, and writes one record per
+measurement to the JSON after every size, so a job that is cut short still leaves a usable curve.
 
-Sizes above the cloud's own point count are built by **tiling**: the cloud is replicated on a
-k x k x k lattice of translated copies (the point spacing, and therefore the local structure and
-the degeneracies, are preserved; the extent grows) and the requested number of points is drawn
-from that.  Records say how many tiles were used, and the plot marks tiled sizes, because they are
-not the same input distribution as a subsample.
+Sizes above the cloud's own point count are built by **tiling**: the cloud is replicated on a k x k
+x k lattice of translated copies (the point spacing, and therefore the local structure and the
+degeneracies, are preserved; the extent grows) and the requested number of points is drawn from
+that.  Records say how many tiles were used, and the plot marks tiled sizes, because they are not
+the same input distribution as a subsample.
 
 The plot is log-log, one panel per cloud, solid without jitter and dashed with it, and the legend
-carries the fitted exponent alpha of t ~ N^alpha (least squares on log t vs log N over the
-measured range).  alpha ~ 1 is linear scaling, alpha ~ 1.33 is the classic 3D Delaunay
-worst case for surface-like input.
+carries the fitted exponent alpha of t ~ N^alpha (least squares on log t vs log N over the measured
+range).  alpha ~ 1 is linear scaling, alpha ~ 1.33 is the classic 3D Delaunay worst case for
+surface-like input.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ import time
 
 import numpy as np
 
-import test_delaunay_surfaces as T
+import benchmark as T
 
 ALL_METHODS = [
     "paragram",
@@ -88,7 +87,8 @@ _TET_CACHE: dict[int, tuple[np.ndarray, float]] = {}
 def _base_tetrahedra(cloud: np.ndarray) -> tuple[np.ndarray, float]:
     """(the cloud's Delaunay tetrahedra as (M, 4, 3) coordinates, median point spacing).
 
-    Computed once per cloud and reused for every size in the sweep."""
+    Computed once per cloud and reused for every size in the sweep.
+    """
     key = id(cloud)
     if key not in _TET_CACHE:
         from scipy.spatial import Delaunay, cKDTree
@@ -105,12 +105,7 @@ def _circumradius(tets: np.ndarray) -> np.ndarray:
     """Circumsphere radius of each (4, 3) tetrahedron; inf for a degenerate one."""
     a = tets[:, 0]
     A = np.stack([tets[:, 1] - a, tets[:, 2] - a, tets[:, 3] - a], axis=1)
-    rhs = (
-        0.5
-        * np.stack([((tets[:, i] - a) ** 2).sum(1) for i in (1, 2, 3)], axis=1)[
-            ..., None
-        ]
-    )
+    rhs = 0.5 * np.stack([((tets[:, i] - a) ** 2).sum(1) for i in (1, 2, 3)], axis=1)[..., None]
     out = np.full(len(tets), np.inf)
     ok = np.abs(np.linalg.det(A)) > 1e-30
     out[ok] = np.linalg.norm(np.linalg.solve(A[ok], rhs[ok])[..., 0], axis=1)
@@ -185,7 +180,8 @@ def _lattice(copies: int, limit: int = 64) -> tuple[int, int, int]:
     drawing 200k points from 8 copies of a 100k cloud leaves each copy at 25% of its original
     density, and 800k needs 27 copies (8 x 99990 = 799920 < 800000) so the density drops from 88%
     at 700k to 30%.  Rectangular lattices offer every product, so the density stays as close to
-    100% as the arithmetic allows."""
+    100% as the arithmetic allows.
+    """
     best = None
     for kx in range(1, limit + 1):
         for ky in range(kx, limit + 1):
@@ -199,9 +195,7 @@ def _lattice(copies: int, limit: int = 64) -> tuple[int, int, int]:
     return best[1] if best else (1, 1, 1)
 
 
-def points_at(
-    cloud: np.ndarray, n: int, rng: np.random.Generator
-) -> tuple[np.ndarray, int]:
+def points_at(cloud: np.ndarray, n: int, rng: np.random.Generator) -> tuple[np.ndarray, int]:
     """n points from the cloud: a random subsample, or a tiling of it when n exceeds its size.
 
     The copies are translated, not scaled, so the point spacing -- and with it the local structure
@@ -234,9 +228,7 @@ def jittered(points: np.ndarray, jitter: float, seed: int) -> np.ndarray:
     if jitter <= 0:
         return points
     rng = np.random.default_rng([seed, len(points), int(jitter * 1e12)])
-    return points + rng.normal(
-        scale=jitter * np.ptp(points, axis=0).max(), size=points.shape
-    )
+    return points + rng.normal(scale=jitter * np.ptp(points, axis=0).max(), size=points.shape)
 
 
 # ----------------------------------------------------------------------------------------
@@ -245,7 +237,10 @@ def jittered(points: np.ndarray, jitter: float, seed: int) -> np.ndarray:
 
 
 def run_once(method: str, pts: np.ndarray, args) -> dict:
-    """Run one method once.  Returns {"total", "gpu", "cpu", "tets", ...} in seconds."""
+    """Run one method once.
+
+    Returns {"total", "gpu", "cpu", "tets", ...} in seconds.
+    """
     if method == "paragram":
         import torch
 
@@ -370,8 +365,9 @@ def measure_in_child(method: str, pts: np.ndarray, args) -> dict:
     """Same as measure(), but in a separate interpreter with a hard wall-clock limit.
 
     gDel3D has segfaulted, aborted and hung on individual inputs of these clouds; none of that can
-    be caught in-process, and a hang blocks every method queued behind it.  The points go through
-    a temporary .npy file and the result comes back as JSON."""
+    be caught in-process, and a hang blocks every method queued behind it.  The points go through a
+    temporary .npy file and the result comes back as JSON.
+    """
     import tempfile
 
     with tempfile.TemporaryDirectory() as d:
@@ -464,9 +460,7 @@ def measure(method: str, pts: np.ndarray, args) -> dict:
     ):
         vals = [r[key] for r in runs if r.get(key) is not None]
         if vals:
-            out[key] = (
-                statistics.fmean(vals) if isinstance(vals[0], (int, float)) else vals[0]
-            )
+            out[key] = statistics.fmean(vals) if isinstance(vals[0], (int, float)) else vals[0]
     return out
 
 
@@ -480,9 +474,12 @@ def record_key(rec: dict) -> tuple:
 
 
 def load_previous(path: str) -> list[dict]:
-    """Records of an earlier run of this sweep.  A record still marked "running" belongs to a
+    """Records of an earlier run of this sweep.
+
+    A record still marked "running" belongs to a
     measurement whose process died -- a segfault inside one of the libraries kills the whole
-    interpreter -- so it becomes an error and is not attempted again."""
+    interpreter -- so it becomes an error and is not attempted again.
+    """
     if not path or not os.path.exists(path):
         return []
     with open(path) as fh:
@@ -532,17 +529,13 @@ def sweep(args) -> dict:
             with open(args.json, "w") as fh:
                 json.dump({"_env": env, "runs": records}, fh, indent=1)
 
-    give_up: set[tuple] = (
-        set()
-    )  # (cloud, jitter, method) that grew too slow to keep measuring
+    give_up: set[tuple] = set()  # (cloud, jitter, method) that grew too slow to keep measuring
     fails: dict[tuple, int] = {}  # consecutive failures per (cloud, jitter, method)
     for cloud_name, cloud in clouds.items():
         rng = np.random.default_rng(args.seed)
         for n in sizes:
             if args.upsample == "densify":
-                base, factor = densified(
-                    cloud, n, rng, max_circumradius=args.max_circumradius
-                )
+                base, factor = densified(cloud, n, rng, max_circumradius=args.max_circumradius)
                 tiles = 1
             else:
                 base, tiles = points_at(cloud, n, rng)
@@ -581,9 +574,7 @@ def sweep(args) -> dict:
                     rec["status"] = "running"
                     records.append(rec)
                     save()
-                    print(
-                        f"[{time.strftime('%H:%M:%S')}] {tag} {m}", end="", flush=True
-                    )
+                    print(f"[{time.strftime('%H:%M:%S')}] {tag} {m}", end="", flush=True)
                     try:
                         rec.update(measure(m, pts, args))
                         rec.pop("status", None)
@@ -635,9 +626,7 @@ def _log_axis(ax) -> None:
     ax.xaxis.set_major_formatter(
         FuncFormatter(
             lambda v, _: (
-                f"{v / 1e6:g}M"
-                if v >= 1e6
-                else (f"{v / 1e3:g}k" if v >= 1e3 else f"{v:g}")
+                f"{v / 1e6:g}M" if v >= 1e6 else (f"{v / 1e3:g}k" if v >= 1e3 else f"{v:g}")
             )
         )
     )
@@ -650,7 +639,8 @@ def fit_exponent(ns, ts) -> tuple[float, float] | None:
     The residual matters as much as the exponent: over 2k..1M only CGAL's single-threaded
     insertion is an actual power law (alpha 1.00, residual 2%).  The others carry a fixed cost at
     the small-N end and change regime above it, so one exponent is a line drawn through a curve --
-    it is reported with its residual so a bad fit is visible instead of authoritative."""
+    it is reported with its residual so a bad fit is visible instead of authoritative.
+    """
     pts = [(math.log(n), math.log(t)) for n, t in zip(ns, ts) if n > 0 and t > 0]
     if len(pts) < 3:
         return None
@@ -661,9 +651,7 @@ def fit_exponent(ns, ts) -> tuple[float, float] | None:
         return None
     a = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den
     b = my - a * mx
-    resid = max(
-        abs(math.exp(b + a * x) - math.exp(y)) / math.exp(y) for x, y in zip(xs, ys)
-    )
+    resid = max(abs(math.exp(b + a * x) - math.exp(y)) / math.exp(y) for x, y in zip(xs, ys))
     return a, resid
 
 
@@ -702,9 +690,7 @@ def plot(
     if not clouds:
         print("nothing to plot")
         return []
-    fig, axes = plt.subplots(
-        2, len(clouds), figsize=(7.5 * len(clouds), 9.4), squeeze=False
-    )
+    fig, axes = plt.subplots(2, len(clouds), figsize=(7.5 * len(clouds), 9.4), squeeze=False)
     for col, cloud in enumerate(clouds):
         ax, ax2 = axes[0][col], axes[1][col]
         for m in ALL_METHODS:
@@ -713,9 +699,7 @@ def plot(
                     (
                         r
                         for r in runs
-                        if r["cloud"] == cloud
-                        and r["method"] == m
-                        and r["jitter"] == jit
+                        if r["cloud"] == cloud and r["method"] == m and r["jitter"] == jit
                     ),
                     key=lambda r: r["n"],
                 )
@@ -748,13 +732,10 @@ def plot(
         synth = [
             r["n"]
             for r in runs
-            if r["cloud"] == cloud
-            and (r.get("tiles", 1) > 1 or r.get("density_factor", 1) > 1)
+            if r["cloud"] == cloud and (r.get("tiles", 1) > 1 or r.get("density_factor", 1) > 1)
         ]
         if synth:
-            mode = next(
-                (r.get("upsample", "tile") for r in runs if r["cloud"] == cloud), "tile"
-            )
+            mode = next((r.get("upsample", "tile") for r in runs if r["cloud"] == cloud), "tile")
             for a_ in (ax, ax2):
                 a_.axvline(min(synth), color="k", lw=0.8, ls=":", alpha=0.6)
             ax.text(
@@ -830,9 +811,7 @@ def plot_breakdown(payload: dict, stem: str) -> list[str]:
     for cloud in sorted({r["cloud"] for r in runs}):
         jitters = sorted({r["jitter"] for r in runs if r["cloud"] == cloud})
         methods = [
-            m
-            for m in ALL_METHODS
-            if any(r["method"] == m and r["cloud"] == cloud for r in runs)
+            m for m in ALL_METHODS if any(r["method"] == m and r["cloud"] == cloud for r in runs)
         ]
         if not methods or not jitters:
             continue
@@ -853,8 +832,7 @@ def plot_breakdown(payload: dict, stem: str) -> list[str]:
                 xy = [
                     (r["n"], (r.get("cpu") or 0.0) / r["seconds"])
                     for r in pts
-                    if r["seconds"] > 0
-                    and (r.get("cpu") is not None or r.get("gpu") is not None)
+                    if r["seconds"] > 0 and (r.get("cpu") is not None or r.get("gpu") is not None)
                 ]
                 if xy:
                     ax.plot(
@@ -899,9 +877,7 @@ def plot_breakdown(payload: dict, stem: str) -> list[str]:
                         for i, r in enumerate(pts)
                     ]
                     bands = list(parts)
-                    if max(residual, default=0.0) > 0.02 * max(
-                        r["seconds"] for r in pts
-                    ):
+                    if max(residual, default=0.0) > 0.02 * max(r["seconds"] for r in pts):
                         bands.append(
                             (
                                 "not timed by the method (setup, transfer)",
@@ -942,11 +918,7 @@ def plot_breakdown(payload: dict, stem: str) -> list[str]:
                 ax.legend(fontsize=6, loc="upper left")
         fig.suptitle(
             f"Where the time goes: {cloud}"
-            + (
-                f"   [{payload['_env'].get('gpu')}]"
-                if payload["_env"].get("gpu")
-                else ""
-            )
+            + (f"   [{payload['_env'].get('gpu')}]" if payload["_env"].get("gpu") else "")
             + "\n"
             + _upsample_note(runs, payload["_env"]),
             fontsize=11,
@@ -994,9 +966,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument(
-        "--ply", nargs="*", default=[], help="point clouds to scale up and down"
-    )
+    ap.add_argument("--ply", nargs="*", default=[], help="point clouds to scale up and down")
     ap.add_argument(
         "--sizes",
         nargs="+",
@@ -1012,9 +982,7 @@ def main() -> int:
         help="relative jitters to measure, 0 = the cloud as it is (default: 0 1e-6)",
     )
     ap.add_argument("--methods", nargs="+", default=ALL_METHODS, choices=ALL_METHODS)
-    ap.add_argument(
-        "--repeats", type=int, default=3, help="timed runs per point (default 3)"
-    )
+    ap.add_argument("--repeats", type=int, default=3, help="timed runs per point (default 3)")
     ap.add_argument(
         "--slow-threshold",
         type=float,
@@ -1028,22 +996,14 @@ def main() -> int:
         help="once a method exceeds this many seconds, stop measuring it at larger sizes "
         "(default 60; 0 = never skip)",
     )
-    ap.add_argument(
-        "--threads", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK") or 0)
-    )
+    ap.add_argument("--threads", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK") or 0))
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--paragram-bbox-pad", type=float, default=10.0)
     ap.add_argument("--repair", choices=["on", "off"], default="on")
-    ap.add_argument(
-        "--gstar4d-bin", default=os.environ.get("GSTAR4D_BIN", "bin/gstar4d")
-    )
+    ap.add_argument("--gstar4d-bin", default=os.environ.get("GSTAR4D_BIN", "bin/gstar4d"))
     ap.add_argument("--gstar4d-grid", type=int, default=512)
-    ap.add_argument(
-        "--dewall-bin", default=os.environ.get("LOCAL_DEWALL_BIN", "bin/dewall")
-    )
-    ap.add_argument(
-        "--cgal-bin", default=os.environ.get("CGAL_DELAUNAY_BIN", "bin/cgal_delaunay")
-    )
+    ap.add_argument("--dewall-bin", default=os.environ.get("LOCAL_DEWALL_BIN", "bin/dewall"))
+    ap.add_argument("--cgal-bin", default=os.environ.get("CGAL_DELAUNAY_BIN", "bin/cgal_delaunay"))
     ap.add_argument("--tool-timeout", type=float, default=120.0)
     ap.add_argument(
         "--give-up-after",

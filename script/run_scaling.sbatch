@@ -9,12 +9,12 @@
 #SBATCH --mem=128G                 # 1M points: the point sets and the tet arrays are large
 #SBATCH --time=12:00:00
 # Time vs number of points, for the two point clouds only, with and without jitter.
-# Usage:  sbatch run_scaling.sbatch
-#         SIZES="2000:200000:10000 200000" sbatch run_scaling.sbatch      (skip the tiled sizes)
-#         CLOUD=data/voronoi_jax_068.ply sbatch run_scaling.sbatch        (one cloud, half the time)
-#         REPEATS=1 sbatch run_scaling.sbatch                            (quick pass)
-#         METHODS="geodel cgal_parallel" sbatch run_scaling.sbatch
-#         UPSAMPLE=densify sbatch run_scaling.sbatch   (sizes above 100k by densifying the same
+# Usage:  sbatch script/run_scaling.sbatch
+#         SIZES="2000:200000:10000 200000" sbatch script/run_scaling.sbatch      (skip the tiled sizes)
+#         CLOUD=data/voronoi_jax_068.ply sbatch script/run_scaling.sbatch        (one cloud, half the time)
+#         REPEATS=1 sbatch script/run_scaling.sbatch                            (quick pass)
+#         METHODS="geodel cgal_parallel" sbatch script/run_scaling.sbatch
+#         UPSAMPLE=densify sbatch script/run_scaling.sbatch   (sizes above 100k by densifying the same
 #                                                       volume instead of tiling copies of it)
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
@@ -27,6 +27,8 @@ export CC=${CC:-x86_64-conda-linux-gnu-gcc} CXX=${CXX:-x86_64-conda-linux-gnu-g+
 export PARAGRAM_MAX_PLANES=128 PARAGRAM_MAX_VERTS=128
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+# the studies live in src/ and import one another by plain module name
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 CUDA_TARGET=$CONDA_PREFIX/targets/x86_64-linux
 [ -d "$CUDA_TARGET/include" ] && export CPATH="$CUDA_TARGET/include${CPATH:+:$CPATH}"
 [ -d "$CUDA_TARGET/lib" ] && export LIBRARY_PATH="$CUDA_TARGET/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
@@ -47,7 +49,7 @@ mkdir -p "$OUT"
 # Some nodes accept the job and then refuse every CUDA context: wait, and if it stays broken,
 # record the node and resubmit excluding it (see cuda_wait.sh).
 echo "== CUDA readiness"
-bash cuda_wait.sh run_scaling.sbatch || exit 1
+bash script/cuda_wait.sh script/run_scaling.sbatch || exit 1
 SIZES=${SIZES:-"2000:200000:10000 200000 300000:1000000:100000"}
 JITTERS=${JITTERS:-"0 1e-6"}
 METHODS=${METHODS:-"paragram gdel3d gstar4d dewall geodel cgal_parallel cgal_sequential"}
@@ -74,7 +76,7 @@ for m in $METHODS; do
     rc=0
     # `timeout` is a backstop: --measure-timeout already bounds the isolated methods, this
     # catches a hang anywhere else (124 = the attempt was killed by it).
-    timeout "$ATTEMPT_TIMEOUT" python scaling_study.py --ply $CLOUD --sizes $SIZES \
+    timeout "$ATTEMPT_TIMEOUT" python main.py experiment=scaling_tile -- --ply $CLOUD --sizes $SIZES \
       --jitter $JITTERS --methods "$m" --repeats "$REPEATS" --threads "$SLURM_CPUS_PER_TASK" \
       --resume --measure-timeout "$MEASURE_TIMEOUT" --upsample "$UPSAMPLE" \
       --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
@@ -86,6 +88,6 @@ for m in $METHODS; do
 done
 
 echo "== merging and plotting"
-python scaling_study.py --plot-only "$OUT"/scaling-*.json \
+python main.py experiment=scaling_tile -- --plot-only "$OUT"/scaling-*.json \
   --csv "$OUT/scaling.csv" --plot "$OUT/scaling.png" 2>&1 | tee "$OUT/scaling.log"
 echo "== done: $OUT/scaling.png (and scaling.csv, scaling-<method>.json)"

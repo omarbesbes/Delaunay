@@ -1,0 +1,19 @@
+# Settings shared by every experiment.  An experiment file in configs/experiments/ overrides
+# these, and `key=value` on the command line overrides both:
+#
+#   python main.py experiment=jitter_sweep repeats=1
+#
+# Every key here becomes a command-line flag of the study that runs (underscores become dashes),
+# so `cgal_bin` below is passed as `--cgal-bin bin/cgal_delaunay`.
+
+# The compiled tools, built by script/build_tools.sh.  A missing one makes the study skip that
+# method rather than fail.
+cgal_bin: bin/cgal_delaunay
+dewall_bin: bin/dewall
+gstar4d_bin: bin/gstar4d
+
+# gStar4D packs a grid coordinate into 10 bits, so 512 is the largest usable resolution.
+gstar4d_grid: 512
+
+# An external tool that exceeds this (seconds) is killed and recorded as failed.
+tool_timeout: 120

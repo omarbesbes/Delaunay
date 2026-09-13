@@ -1,0 +1,21 @@
+description: Correctness against CGAL on the two point clouds (the delivered result)
+study: benchmark
+
+# The two photogrammetric clouds.  Duplicate points are removed and the coordinates normalised
+# into the unit cube before anything else; see docs/jitter_sweep.md section 0.
+ply:
+  - data/voronoi_iarpa_001.ply
+  - data/voronoi_jax_068.ply
+no_analytic: true
+models: true
+unit_cube: true
+
+# The perturbation that makes the triangulation unique.  docs/jitter_sweep.md measures why 1e-6.
+jitter: 1.0e-6
+
+repeats: 3
+slow_repeats: 2
+slow_threshold: 100
+geodel: auto
+verbose: true
+json: results/benchmark/results.json

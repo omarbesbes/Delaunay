@@ -68,7 +68,9 @@ import shlex
 import subprocess
 import sys
 
-TEX_DECLS = "texture<int> pbaTexColor; \ntexture<int> pbaTexLinks; \ntexture<short> pbaTexPointer; \n"
+TEX_DECLS = (
+    "texture<int> pbaTexColor; \ntexture<int> pbaTexLinks; \ntexture<short> pbaTexPointer; \n"
+)
 
 TEX_DECLS_NEW = """// CUDA 12 removed the texture reference API (texture<>, cudaBindTexture, tex1Dfetch).  These
 // three references were read-only fetches from linear int/short device memory, so they become
@@ -89,12 +91,13 @@ TEXFETCH_ANCHOR = "#define TOID(x, y, z, w)"
 TEXFETCH_NEW = (
     '// The pbaTex* "textures" are plain __device__ pointers now (see patch_gstar4d.py); keep the\n'
     "// call sites unchanged by turning tex1Dfetch() into a read-only cached load.\n"
-    "#define tex1Dfetch( tex, idx ) ( __ldg( &( tex )[ ( idx ) ] ) )\n\n"
-    + TEXFETCH_ANCHOR
+    "#define tex1Dfetch( tex, idx ) ( __ldg( &( tex )[ ( idx ) ] ) )\n\n" + TEXFETCH_ANCHOR
 )
 
 PLY_HEADER = '    outFile << "element face " << tetraNum * 3 << endl;'
-PLY_HEADER_NEW = '    outFile << "element face " << tetraNum << endl;  // one 4-index face per tetrahedron'
+PLY_HEADER_NEW = (
+    '    outFile << "element face " << tetraNum << endl;  // one 4-index face per tetrahedron'
+)
 
 PLY_PRECISION_ANCHOR = "    const int pointNum = _pointVec.size();"
 PLY_PRECISION_NEW = (
@@ -183,12 +186,10 @@ def _split_top_level(text: str) -> list[str]:
 
 
 def _rewrite_binds(src: str) -> tuple[str, int]:
-    """cudaBindTexture(0, tex, ptr[, size]) -> PBA_BIND(tex, ptr); cudaUnbindTexture -> nothing."""
+    """CudaBindTexture(0, tex, ptr[, size]) -> PBA_BIND(tex, ptr); cudaUnbindTexture -> nothing."""
     out, changed = [], 0
     for line in src.splitlines(keepends=True):
-        m = re.match(
-            r"^(\s*)CudaSafeCall\(\s*cudaBindTexture\(\s*0\s*,(.*)\)\s*\)\s*;\s*$", line
-        )
+        m = re.match(r"^(\s*)CudaSafeCall\(\s*cudaBindTexture\(\s*0\s*,(.*)\)\s*\)\s*;\s*$", line)
         if m:
             args = _split_top_level(m.group(2))
             out.append(f"{m.group(1)}PBA_BIND( {args[0]}, {args[1]} );\n")
@@ -205,14 +206,10 @@ def _rewrite_binds(src: str) -> tuple[str, int]:
     return "".join(out), changed
 
 
-def build_commands(
-    root: str, arch: str = "80", out: str = "gstar4d", cc: str = "cc"
-) -> list[str]:
+def build_commands(root: str, arch: str = "80", out: str = "gstar4d", cc: str = "cc") -> list[str]:
     """The two commands that build the binary: Shewchuk's predicates as C, then everything else."""
     root = os.path.abspath(root)
-    obj = os.path.join(
-        os.path.dirname(os.path.abspath(out)) or ".", "gstar4d_predicates.o"
-    )
+    obj = os.path.join(os.path.dirname(os.path.abspath(out)) or ".", "gstar4d_predicates.o")
     predicates = os.path.join(root, "GDelaunay", "Common", "predicates.c")
     includes = " ".join(f"-I{os.path.join(root, d)}" for d in INCLUDE_DIRS)
     srcs = " ".join(os.path.join(root, s) for s in CU_SOURCES)
@@ -257,28 +254,21 @@ def patch(root: str) -> bool:
     if "PBA_BIND" in src:
         print("GDelaunay/PBA/pba3DHost.cu: already patched")
     elif TEX_DECLS not in src:
-        print(
-            f"GDelaunay/PBA/pba3DHost.cu: texture declarations not found:\n{TEX_DECLS}"
-        )
+        print(f"GDelaunay/PBA/pba3DHost.cu: texture declarations not found:\n{TEX_DECLS}")
         ok = False
     else:
         src = src.replace(TEX_DECLS, TEX_DECLS_NEW, 1)
         src, n = _rewrite_binds(src)
         with open(host, "w") as f:
             f.write(src)
-        print(
-            f"GDelaunay/PBA/pba3DHost.cu: textures -> device pointers, {n} bind/unbind site(s)"
-        )
+        print(f"GDelaunay/PBA/pba3DHost.cu: textures -> device pointers, {n} bind/unbind site(s)")
         leftover = [
             ln
             for ln in src.splitlines()
-            if re.search(r"cuda(?:Un)?BindTexture\s*\(", ln)
-            and not ln.lstrip().startswith("//")
+            if re.search(r"cuda(?:Un)?BindTexture\s*\(", ln) and not ln.lstrip().startswith("//")
         ]
         if leftover:
-            print(
-                "GDelaunay/PBA/pba3DHost.cu: WARNING some texture binds were not rewritten"
-            )
+            print("GDelaunay/PBA/pba3DHost.cu: WARNING some texture binds were not rewritten")
             ok = False
 
     kern = os.path.join(root, "GDelaunay", "PBA", "pba3DKernel.h")
@@ -330,9 +320,7 @@ def patch(root: str) -> bool:
         else:
             with open(geom, "w") as f:
                 f.write(src)
-            print(
-                "GDelaunay/Common/Geometry.cu: PLY writer emits 4-index tetrahedra at 9 digits"
-            )
+            print("GDelaunay/Common/Geometry.cu: PLY writer emits 4-index tetrahedra at 9 digits")
 
     return ok
 
@@ -343,9 +331,7 @@ if __name__ == "__main__":
     good = patch(root)
     if "--build" in argv:
         arch = next((a.split("=", 1)[1] for a in argv if a.startswith("--arch=")), "80")
-        out = next(
-            (a.split("=", 1)[1] for a in argv if a.startswith("--out=")), "gstar4d"
-        )
+        out = next((a.split("=", 1)[1] for a in argv if a.startswith("--out=")), "gstar4d")
         cc = next(
             (a.split("=", 1)[1] for a in argv if a.startswith("--cc=")),
             os.environ.get("CC", "cc"),
