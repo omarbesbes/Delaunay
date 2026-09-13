@@ -14,13 +14,18 @@ same `run_method` the jitter study uses, and writes the result to `<out>/<cloud>
 
 Preprocessing follows the benchmark, and every step is recorded in summary.json: exact duplicate
 points are removed (a Delaunay triangulation is not defined on repeated points), the cloud is
-normalised into the unit cube (`--no-unit-cube` to keep the original frame; the affine map back is
-stored either way), and an optional jitter is added (`--jitter 1e-6` is what the benchmark uses;
-the default here is 0, because a tool that produces output should not perturb it unasked).
+normalised into the unit cube for the method (`--no-unit-cube` to skip that), and an optional
+jitter is added (`--jitter 1e-6` is what the benchmark uses; the default here is 0, because a tool
+that produces output should not perturb it unasked).
 
+The outputs are written in the **input's coordinate frame**, so `mesh.vtk` overlays the PLY in a
+viewer; the normalisation is internal and undone before writing (`--unit-cube-output` keeps it).
 `points.npy` is not always the input in a new order: Local DeWall and gStar4D triangulate a
-float32, rescaled copy of the points, so for them `points.npy` holds that copy and summary.json
-says so (`"points": "as triangulated by the tool"`).
+float32, rescaled copy of the points, so for them `points.npy` holds that copy, mapped back into
+the input frame, and summary.json says so.
+
+CloudCompare reads a VTK unstructured grid as its points only and does not draw tetrahedral cells;
+ParaView does (`Extract Edges` or a `Clip` shows the interior).
 """
 
 from __future__ import annotations
@@ -73,8 +78,13 @@ def main() -> int:
     ap.add_argument(
         "--no-unit-cube",
         action="store_true",
-        help="keep the original coordinate frame (default: normalise into the unit cube, as the "
-        "benchmark does; the map back is stored in summary.json either way)",
+        help="do not normalise into the unit cube before running the method (the benchmark does)",
+    )
+    ap.add_argument(
+        "--unit-cube-output",
+        action="store_true",
+        help="write the outputs in the normalised frame instead of mapping them back to the "
+        "input's coordinates",
     )
     ap.add_argument(
         "--no-dedup",
@@ -158,6 +168,10 @@ def main() -> int:
     tool_points = info.pop("_points", None)
     points_out = np.asarray(tool_points if tool_points is not None else pts, dtype=np.float64)
     predicates = info.pop("predicates", None)
+    # The method saw the unit cube; the user gave the PLY.  Write what overlays the PLY.
+    if not args.no_unit_cube and not args.unit_cube_output:
+        points_out = points_out * scale + lo
+    frame = "unit cube" if (args.unit_cube_output and not args.no_unit_cube) else "input"
 
     summary = {
         "method": args.method,
@@ -170,12 +184,14 @@ def main() -> int:
         "preprocessing": {
             "duplicates_removed": int(n_raw - len(pts)) if not args.no_dedup else 0,
             "unit_cube": not args.no_unit_cube,
+            # the method ran on (p - origin) / scale; the outputs are mapped back unless
+            # --unit-cube-output
+            "unit_cube_map": {"scale": scale, "origin": lo.tolist()},
             "jitter": args.jitter,
             "seed": args.seed,
-            # original = points * scale + origin, for the frame points.npy is written in
-            "to_original_frame": {"scale": scale, "origin": lo.tolist()},
         },
-        "points": "as triangulated by the tool (float32, rescaled)"
+        "frame": frame,
+        "points": "as triangulated by the tool (float32, rescaled), mapped to the output frame"
         if tool_points is not None
         else "the preprocessed input",
         "method_info": {k: v for k, v in info.items() if not k.startswith("_")},

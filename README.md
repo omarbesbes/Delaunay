@@ -128,8 +128,10 @@ python main.py experiment=triangulate method=geodel ply=cloud.ply out=results/mi
 
 Writes `<out>/<cloud>_<method>/` with `points.npy`, `tets.npy` (indices into it), `mesh.vtk` for
 ParaView, and `summary.json` (timing, preprocessing, and the difference to CGAL with `check=true`).
-Duplicate points are removed and the cloud normalised into the unit cube as in the benchmark (the
-map back is in `summary.json`); no jitter is added unless asked (`jitter=1e-6`).
+Duplicate points are removed and the cloud normalised into the unit cube for the method, as in
+the benchmark, but the outputs are mapped back and **overlay the input PLY** in a viewer; no jitter
+is added unless asked (`jitter=1e-6`). CloudCompare shows a VTK grid as points only — ParaView
+draws the tetrahedra.
 
 `geodel`, `cgal_parallel` and `cgal_sequential` run on the CPU, so the commands above work on a
 login node. `paragram`, `gdel3d`, `gstar4d` and `dewall` need a GPU — on the cluster, submit them:
