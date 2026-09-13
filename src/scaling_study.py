@@ -1074,6 +1074,16 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    # Create the directory of every output up front: a job overrides some paths and not others,
+    # and a missing directory must not surface only when the sweep is already finished.
+    for path in (
+        getattr(args, "json", None),
+        getattr(args, "csv", None),
+        getattr(args, "plot", None),
+    ):
+        if path:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+
     if args.child:  # one isolated measurement, called by measure_in_child()
         if args.cgal_bin and os.path.exists(args.cgal_bin):
             os.environ["CGAL_DELAUNAY_BIN"] = args.cgal_bin

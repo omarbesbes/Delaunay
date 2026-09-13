@@ -70,17 +70,26 @@ echo "== scaling sweep: sizes [$SIZES], jitters [$JITTERS], methods [$METHODS], 
 ATTEMPTS=${ATTEMPTS:-4}
 ATTEMPT_TIMEOUT=${ATTEMPT_TIMEOUT:-5400}     # per attempt, seconds: a hang cannot eat the job
 MEASURE_TIMEOUT=${MEASURE_TIMEOUT:-300}      # per isolated measurement (gDel3D hung for 13 min)
+
+# Overrides are `key=value`, which replaces the value from the experiment config; raw `--flags`
+# would append a second copy and leave whatever is not overridden pointing at the config's paths.
+# Lists are comma-separated in that syntax.
+EXPERIMENT=$([ "$UPSAMPLE" = "densify" ] && echo scaling_densify || echo scaling_tile)
+PLY_LIST="[$(echo $CLOUD | tr ' ' ',')]"
+SIZE_LIST="[$(echo $SIZES | tr ' ' ',')]"
+JITTER_LIST="[$(echo $JITTERS | tr ' ' ',')]"
 for m in $METHODS; do
   for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "-- $m (attempt $attempt/$ATTEMPTS)"
     rc=0
     # `timeout` is a backstop: --measure-timeout already bounds the isolated methods, this
     # catches a hang anywhere else (124 = the attempt was killed by it).
-    timeout "$ATTEMPT_TIMEOUT" python main.py experiment=scaling_tile -- --ply $CLOUD --sizes $SIZES \
-      --jitter $JITTERS --methods "$m" --repeats "$REPEATS" --threads "$SLURM_CPUS_PER_TASK" \
-      --resume --measure-timeout "$MEASURE_TIMEOUT" --upsample "$UPSAMPLE" \
-      --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
-      --json "$OUT/scaling-$m.json" 2>&1 | tee -a "$OUT/scaling-$m.log" || rc=$?
+    timeout "$ATTEMPT_TIMEOUT" python main.py experiment="$EXPERIMENT" \
+      ply="$PLY_LIST" sizes="$SIZE_LIST" jitter="$JITTER_LIST" methods="$m" \
+      repeats="$REPEATS" threads="$SLURM_CPUS_PER_TASK" resume=true \
+      measure_timeout="$MEASURE_TIMEOUT" upsample="$UPSAMPLE" \
+      json="$OUT/scaling-$m.json" csv="$OUT/scaling.csv" plot="$OUT/scaling.png" \
+      2>&1 | tee -a "$OUT/scaling-$m.log" || rc=$?
     [ "$rc" = 0 ] && break
     # 134 = SIGABRT, 139 = SIGSEGV: the library killed the interpreter, not an exception
     echo "   $m: the process died (exit $rc); resuming past that measurement"
@@ -88,6 +97,7 @@ for m in $METHODS; do
 done
 
 echo "== merging and plotting"
-python main.py experiment=scaling_tile -- --plot-only "$OUT"/scaling-*.json \
+# Rendering runs no experiment, so it calls the study directly rather than naming one.
+python src/scaling_study.py --plot-only "$OUT"/scaling-*.json \
   --csv "$OUT/scaling.csv" --plot "$OUT/scaling.png" 2>&1 | tee "$OUT/scaling.log"
 echo "== done: $OUT/scaling.png (and scaling.csv, scaling-<method>.json)"

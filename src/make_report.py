@@ -922,6 +922,9 @@ def main():
     ap.add_argument("-o", "--output", default="report.md")
     args = ap.parse_args()
 
+    # the charts are written next to the report, from the same stem
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+
     env, data = load(args.results)
     jenv, jdata = load(args.jitter) if args.jitter else (None, None)
     ref = ref_name(data)  # noqa: F841 - used by the appendix sections below

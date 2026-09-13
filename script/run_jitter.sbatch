@@ -113,15 +113,26 @@ echo "== jitter sweep: jitters [$JITTERS], methods [$METHODS], clouds [$CLOUD]"
 ATTEMPTS=${ATTEMPTS:-4}
 ATTEMPT_TIMEOUT=${ATTEMPT_TIMEOUT:-3600}
 JSON="$OUT/jitter.json"
+
+# Overrides go to main.py as `key=value`, which *replaces* the value from
+# configs/experiments/jitter_sweep.yaml.  Passing raw `--flags` after `--` would instead append a
+# second copy of each option: argparse keeps the last, so the ones given here would win and the
+# ones left out would silently keep their config value -- which is how an earlier run wrote its
+# JSON to the job directory and its CSV to the config's, and died on the missing directory.
+# Lists are comma-separated in this syntax, so turn the space-separated shell variables around.
+PLY_LIST="[$(echo $CLOUD | tr ' ' ',')]"
+JITTER_LIST="[$(echo $JITTERS | tr ' ' ',')]"
+
 for m in $METHODS; do
   for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "-- $m (attempt $attempt/$ATTEMPTS)"
     rc=0
-    timeout "$ATTEMPT_TIMEOUT" python main.py experiment=jitter_sweep -- --ply $CLOUD --jitters $JITTERS \
-      --methods "$m" --repeats "$REPEATS" --threads "$SLURM_CPUS_PER_TASK" --resume \
-      --tool-timeout "$TOOL_TIMEOUT" --gstar4d-grid "$GSTAR4D_GRID" \
-      --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
-      --json "$JSON" 2>&1 | tee -a "$OUT/jitter-$m.log" || rc=$?
+    timeout "$ATTEMPT_TIMEOUT" python main.py experiment=jitter_sweep \
+      ply="$PLY_LIST" jitters="$JITTER_LIST" methods="$m" repeats="$REPEATS" \
+      threads="$SLURM_CPUS_PER_TASK" resume=true tool_timeout="$TOOL_TIMEOUT" \
+      gstar4d_grid="$GSTAR4D_GRID" json="$JSON" csv="$OUT/jitter.csv" \
+      markdown="$OUT/jitter.md" plot="$OUT/jitter.png" \
+      2>&1 | tee -a "$OUT/jitter-$m.log" || rc=$?
     [ "$rc" = 0 ] && break
     # 134 = SIGABRT, 139 = SIGSEGV: the library killed the interpreter, not an exception
     echo "   $m: the process died (exit $rc); resuming past that measurement"
@@ -129,7 +140,9 @@ for m in $METHODS; do
 done
 
 echo "== tables and plot"
-python main.py experiment=jitter_sweep -- --plot-only "$JSON" \
+# Rendering is the one thing that does not go through main.py: --plot-only merges result files
+# and runs no experiment, so there is no experiment to name.
+python src/jitter_study.py --plot-only "$JSON" \
   --csv "$OUT/jitter.csv" --markdown "$OUT/jitter.md" --plot "$OUT/jitter.png" \
   2>&1 | tee "$OUT/jitter-report.log"
 echo "== done: $OUT/jitter.md, jitter.png, jitter.csv, jitter.json"

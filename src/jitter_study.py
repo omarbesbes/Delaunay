@@ -924,6 +924,13 @@ def main() -> int:
     ap.add_argument("--plot-only", nargs="+", default=None, help="merge these JSON files instead")
     args = ap.parse_args()
 
+    # Every output goes somewhere that may not exist yet: the job overrides --json to its own
+    # results/<jobid>/ directory while --csv and the rest come from the config, so creating only
+    # the JSON's directory leaves the others to fail at the very end of a run.
+    for path in (args.json, args.csv, args.markdown, args.plot):
+        if path:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+
     if args.plot_only:
         # Files are merged in the order given and a later file wins, so re-running a few methods
         # into a new job directory and passing `old.json new.json` replaces exactly those

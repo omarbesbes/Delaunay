@@ -170,13 +170,12 @@ for tool, what in (
     print(f"   {tool:17s}:", f"OK ({what})" if os.access(tool, os.X_OK) else f"MISSING -> {what} will be skipped")
 PY
 
-DATASETS="--no-analytic --models"
-[ "${FULL:-0}" = "1" ] && DATASETS="--n 20000"
-COMMON="--unit-cube --repeats $REPEATS --slow-repeats 2 --slow-threshold 100 --verbose \
-  --cgal-bin bin/cgal_delaunay --dewall-bin bin/dewall --gstar4d-bin bin/gstar4d \
-  --geodel auto --geodel-threads $SLURM_CPUS_PER_TASK --tool-timeout $TOOL_TIMEOUT \
-  --gstar4d-grid ${GSTAR4D_GRID:-512} \
-  --ply data/*.ply $DATASETS"
+# Overrides are `key=value`, which replaces the config value; raw `--flags` would append a second
+# copy of each option and leave the rest pointing at the config's own paths.  FULL=1 switches to
+# the experiment that also samples the analytic surfaces and the meshes.
+EXPERIMENT=$([ "${FULL:-0}" = "1" ] && echo benchmark_full || echo benchmark)
+COMMON="repeats=$REPEATS geodel_threads=$SLURM_CPUS_PER_TASK tool_timeout=$TOOL_TIMEOUT \
+  gstar4d_grid=${GSTAR4D_GRID:-512}"
 
 echo "== warm-up: JIT-compile Paragram's CUDA extension"
 python -c "import torch, paragram; d = paragram.voronoi_diagram(torch.rand(10000, 3, device='cuda'), bbox_pad=10.0); print('paragram ready, status ok:', int((d.status == 0).sum()), '/ 10000')"
@@ -187,7 +186,7 @@ python -c "import torch, paragram; d = paragram.voronoi_diagram(torch.rand(10000
 # measurement that killed the process is skipped.
 ATTEMPTS=${ATTEMPTS:-4}
 PASS_TIMEOUT=${PASS_TIMEOUT:-7200}    # per attempt, seconds
-run_pass() {  # run_pass <log-name> <json> <extra args...>
+run_pass() {  # run_pass <log-name> <json> <key=value overrides...>
   local name=$1 json=$2
   shift 2
   for attempt in $(seq 1 "$ATTEMPTS"); do
@@ -195,8 +194,8 @@ run_pass() {  # run_pass <log-name> <json> <extra args...>
     local rc=0
     # `timeout` bounds an attempt that hangs instead of crashing (gDel3D has done both);
     # --resume then continues past the measurement that was killed.  124 = killed by timeout.
-    timeout "$PASS_TIMEOUT" python main.py experiment=benchmark -- $COMMON "$@" --resume \
-      --json "$json" 2>&1 | tee -a "$OUT/$name.log" || rc=$?
+    timeout "$PASS_TIMEOUT" python main.py experiment="$EXPERIMENT" $COMMON "$@" \
+      resume=true json="$json" 2>&1 | tee -a "$OUT/$name.log" || rc=$?
     [ "$rc" = 0 ] && return 0
     # 134 = SIGABRT, 139 = SIGSEGV: the library killed the interpreter, not an exception
     echo "   $name: the process died (exit $rc); resuming without that measurement"
@@ -206,14 +205,14 @@ run_pass() {  # run_pass <log-name> <json> <extra args...>
 }
 
 echo "== corrected Paragram (pad 10x, CPU repair) + gDel3D + gStar4D + Local DeWall + GeoDel + CGAL parallel/sequential"
-run_pass run "$OUT/results.json" --paragram-bbox-pad 10 --repair on
+run_pass run "$OUT/results.json" paragram_bbox_pad=10 repair=on
 
 REPORT_ARGS=("$OUT/results.json")
 
 if [ "$BASELINE" = "1" ]; then
   echo "== baseline Paragram (upstream box, no repair), $BASELINE_REPEATS repeats -- Paragram only, the others are unaffected"
-  run_pass run_baseline "$OUT/results_baseline.json" --repeats "$BASELINE_REPEATS" \
-    --paragram-bbox-pad -1 --repair off --gdel3d off --geodel off --gstar4d-bin "" --dewall-bin ""
+  run_pass run_baseline "$OUT/results_baseline.json" repeats="$BASELINE_REPEATS" \
+    paragram_bbox_pad=-1 repair=off gdel3d=off geodel=off gstar4d_bin="" dewall_bin=""
   REPORT_ARGS+=(--baseline "$OUT/results_baseline.json")
 else
   echo "== baseline Paragram pass skipped (BASELINE=0): only the corrected Paragram is measured"
@@ -221,10 +220,11 @@ fi
 
 if [ "$JITTER" != "0" ]; then
   echo "== jittered ($JITTER) run, $JITTER_REPEATS repeats -- same datasets without co-spherical degeneracies"
-  run_pass run_jitter "$OUT/results_jitter.json" --repeats "$JITTER_REPEATS" --jitter "$JITTER" \
-    --paragram-bbox-pad 10 --repair on
+  run_pass run_jitter "$OUT/results_jitter.json" repeats="$JITTER_REPEATS" jitter="$JITTER" \
+    paragram_bbox_pad=10 repair=on
   REPORT_ARGS+=(--jitter "$OUT/results_jitter.json")
 fi
 
-python main.py experiment=report -- "${REPORT_ARGS[@]}" -o "$OUT/report.md"
+# Rendering runs no experiment, so it calls the study directly.
+python src/make_report.py "${REPORT_ARGS[@]}" -o "$OUT/report.md"
 echo "== done: $OUT/report.md"
