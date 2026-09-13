@@ -218,17 +218,6 @@ Voronoi-to-Delaunay conversion against Qhull and is skipped where torch is absen
 - **Our description of Local DeWall's parallel strategy** is inferred from its status counters and
   memory layout, not read from the paper. Treat it as provisional.
 
-## 📝 Citing our work
-
-```bibtex
-@misc{besbes_delaunaybench_2026,
-  title  = {DelaunayBench: GPU Delaunay triangulation on degenerate point clouds},
-  author = {Besbes, Omar},
-  year   = {2026},
-  note   = {Student research project, CentraleSupélec},
-  url    = {https://github.com/omarbesbes/DelaunayBench}
-}
-```
 
 The methods compared are [CGAL](https://www.cgal.org/),
 [gDel3D](https://github.com/ashwin/gDel3D) (Cao et al., 2014),
