@@ -81,14 +81,20 @@ print("cgal_delaunay:", out.strip())
 PY
 
 echo "== [4/7] Paragram (patched: relative clipping pad, cell budget)"
-[ -d third_party/paragram ] || git clone -q --recursive https://github.com/zenseact/paragram.git third_party/paragram
+if [ ! -d third_party/paragram ]; then
+  git clone -q --recursive https://github.com/zenseact/paragram.git third_party/paragram \
+    || { echo "cannot reach github.com -- run this on the LOGIN node, not a compute node" >&2; exit 1; }
+fi
 python script/patch_paragram.py third_party/paragram
 pip install -q $PIP_FORCE --no-deps third_party/paragram
 python -c "import paragram, inspect; print('paragram import OK; bbox_pad:', 'bbox_pad' in inspect.signature(paragram.voronoi_diagram).parameters)"
 echo "   (Paragram's CUDA extension is JIT-compiled at first use, inside the SLURM job on the GPU node)"
 
 echo "== [5/7] pyGDel3D (patched: dead-tet flags, phase timers, predicate counters, TORCH_CUDA_ARCH_LIST)"
-[ -d third_party/pyGDel3D ] || git clone -q https://github.com/half-potato/pyGDel3D.git third_party/pyGDel3D
+if [ ! -d third_party/pyGDel3D ]; then
+  git clone -q https://github.com/half-potato/pyGDel3D.git third_party/pyGDel3D \
+    || { echo "cannot reach github.com -- run this on the LOGIN node, not a compute node" >&2; exit 1; }
+fi
 python script/patch_pygdel3d.py third_party/pyGDel3D
 pip install -q $PIP_FORCE --no-build-isolation --no-deps third_party/pyGDel3D
 python -c "import gdel3d; print('pyGDel3D OK; get_stats:', hasattr(gdel3d.DelOutput, 'get_stats'))"

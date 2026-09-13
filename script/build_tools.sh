@@ -49,6 +49,31 @@ for n in $SM; do GENCODE="$GENCODE -gencode arch=compute_$n,code=sm_$n"; done
 GS_ARCHS=$(echo $SM | tr ' ' ',')
 echo "-- GPU architectures: $(echo $SM | tr ' ' ',')"
 
+# The compute nodes have no route to the internet, so a source that is not already in
+# third_party/ cannot be fetched from inside a job.  Say that, instead of letting git fail with
+# "Could not resolve host".
+clone_or_explain() {  # clone_or_explain <url> <dir>
+  local url=$1 dir=$2
+  [ -d "$dir" ] && return 0
+  if git clone -q "$url" "$dir" 2>/dev/null; then
+    return 0
+  fi
+  cat >&2 <<MSG
+-- cannot fetch $url
+
+   $dir is missing and cloning failed.  On Ruche this almost always means the
+   command is running on a compute node, which has no internet access.
+
+   Run this once on the LOGIN node, then resubmit the job:
+
+     module load anaconda3/2023.09-0/none-none
+     source activate \$WORKDIR/envs/delaunay
+     export CUDA_HOME=\$CONDA_PREFIX CC=x86_64-conda-linux-gnu-gcc CXX=x86_64-conda-linux-gnu-g++
+     cd $(pwd) && bash script/build_tools.sh
+MSG
+  return 1
+}
+
 if [ "$FORCE" = "--force" ] || [ ! -x bin/cgal_delaunay ]; then
   echo "-- building bin/cgal_delaunay (CGAL parallel, TBB)"
   $CXX -O3 -std=c++17 -pthread -DCGAL_LINKED_WITH_TBB -I"$CONDA_PREFIX/include" src/cgal_delaunay.cpp \
@@ -73,7 +98,7 @@ fi
 
 if [ "$FORCE" = "--force" ] || [ ! -x bin/dewall ]; then
   echo "-- building bin/dewall (Local DeWall, archs $GS_ARCHS)"
-  [ -d third_party/Local-DeWall ] || git clone -q https://github.com/WuhengGao/Local-DeWall.git third_party/Local-DeWall
+  clone_or_explain https://github.com/WuhengGao/Local-DeWall.git third_party/Local-DeWall
   $PY script/patch_dewall.py third_party/Local-DeWall
   D=third_party/Local-DeWall
   nvcc -O3 -std=c++17 -rdc=true -I$D/include $GENCODE -Xcompiler -fopenmp \
@@ -86,7 +111,7 @@ fi
 
 if [ "$FORCE" = "--force" ] || [ ! -x bin/gstar4d ]; then
   echo "-- building bin/gstar4d (gStar4D, archs $GS_ARCHS)"
-  [ -d third_party/gStar4D ] || git clone -q https://github.com/ashwin/gStar4D.git third_party/gStar4D
+  clone_or_explain https://github.com/ashwin/gStar4D.git third_party/gStar4D
   # patch_gstar4d.py ports the PBA stage off the texture-reference API (removed in CUDA 12) and
   # makes the PLY writer emit one 4-index tetrahedron per line at 9 significant digits; then
   # --build --run compiles predicates.c as C, then everything else with nvcc, echoing both

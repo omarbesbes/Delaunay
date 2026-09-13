@@ -70,6 +70,12 @@ conda activate "$WORKDIR/envs/delaunay"
 the six need source changes to build on this cluster or to report what we measure, and each patch
 explains why at the top of its file. Expect 15–30 minutes, most of it compiling CUDA.
 
+> **Run the installation on a login node.** Ruche's compute nodes have no route to the internet,
+> so the `git clone` steps fail inside a job. `third_party/` is not tracked here — the upstream
+> sources are fetched and patched rather than vendored — so a fresh clone has nothing to build
+> from until this has been run once. If the environment already exists and only the compiled tools
+> are missing, `bash script/build_tools.sh` on the login node is enough.
+
 ## 📦 Datasets
 
 The two point clouds are tracked in [`data/`](data/) — about 100 000 points each, from the IARPA
