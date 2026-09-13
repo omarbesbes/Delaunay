@@ -1,4 +1,4 @@
-description: Correctness against CGAL on the two point clouds (the delivered result)
+description: Correctness against CGAL on the two raw point clouds (the job adds a jitter=1e-6 pass)
 study: benchmark
 
 # The two photogrammetric clouds.  Duplicate points are removed and the coordinates normalised
@@ -10,8 +10,10 @@ no_analytic: true
 models: true
 unit_cube: true
 
-# The perturbation that makes the triangulation unique.  docs/jitter_sweep.md measures why 1e-6.
-jitter: 1.0e-6
+# The cloud exactly as measured -- the pass in which degeneracy shows.  run_benchmark.sbatch
+# runs a second pass with jitter=1e-6 and the report puts the two side by side; standalone,
+# `python main.py experiment=benchmark jitter=1e-6` is the clean triangulation.
+jitter: 0
 
 repeats: 3
 slow_repeats: 2

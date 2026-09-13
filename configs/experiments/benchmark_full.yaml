@@ -7,7 +7,10 @@ ply:
 # 20k samples of every analytic surface (sphere, torus, Klein bottle, ...) and every mesh
 n: 20000
 unit_cube: true
-jitter: 1.0e-6
+# The cloud exactly as measured -- the pass in which degeneracy shows.  run_benchmark.sbatch
+# runs a second pass with jitter=1e-6 and the report puts the two side by side; standalone,
+# `python main.py experiment=benchmark jitter=1e-6` is the clean triangulation.
+jitter: 0
 repeats: 3
 slow_repeats: 2
 slow_threshold: 100

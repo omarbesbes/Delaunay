@@ -111,7 +111,7 @@ still works and the two paths cannot drift apart.
 
 | experiment | what it measures | cost |
 |---|---|---|
-| `benchmark` | correctness against CGAL on the two clouds | ~20 min |
+| `benchmark` | correctness against CGAL on the two clouds, raw; the job adds a jitter 1e-6 pass and reports both | ~20 min |
 | `benchmark_full` | the above plus analytic surfaces and meshes (58 datasets) | ~6 h |
 | `jitter_sweep` | deformation, cost and exact-predicate rate over 7 orders of magnitude | ~50 min |
 | `scaling_tile` | time versus point count, 2k → 1M, by tiling copies | ~4 h |
