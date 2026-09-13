@@ -100,6 +100,24 @@ def main() -> int:
 
     if args.cgal_bin and os.path.exists(args.cgal_bin):
         os.environ["CGAL_DELAUNAY_BIN"] = os.path.abspath(args.cgal_bin)
+
+    # Four of the seven methods run on the GPU.  On a cluster login node there is none, and torch
+    # would only say "Found no NVIDIA driver" from deep inside a library call.
+    gpu_methods = ("paragram", "gdel3d", "gstar4d", "dewall")
+    if args.method in gpu_methods and args.device == "cuda":
+        import torch
+
+        if not torch.cuda.is_available():
+            print(
+                f"{args.method} runs on the GPU and this machine has none.\n"
+                "On the cluster, submit it as a job from the repository root:\n"
+                f"    METHOD={args.method} PLY={args.ply} OUT={args.out}"
+                + (f" JITTER={args.jitter:g}" if args.jitter else "")
+                + (" CHECK=true" if args.check else "")
+                + " sbatch script/run_triangulate.sbatch\n"
+                "geodel, cgal_parallel and cgal_sequential run on the CPU and work here directly."
+            )
+            return 2
     for m, path in (("gstar4d", args.gstar4d_bin), ("dewall", args.dewall_bin)):
         if args.method == m and not (path and os.path.exists(path)):
             print(f"{m}: binary not found at {path}; build it with `bash script/build_tools.sh`")

@@ -9,6 +9,7 @@ Everything that is not the benchmark itself: installing, building, submitting, p
 | `run_benchmark.sbatch` | the correctness benchmark (`FULL=1` adds analytic surfaces and meshes) |
 | `run_jitter.sbatch` | the jitter sweep |
 | `run_scaling.sbatch` | time versus point count (`UPSAMPLE=densify` for the second axis) |
+| `run_triangulate.sbatch` | one method on one PLY on a GPU node: `METHOD=gdel3d PLY=cloud.ply sbatch script/run_triangulate.sbatch` |
 | `cuda_wait.sh` | waits for a usable CUDA context; resubmits excluding the node if none appears |
 | `diagnose_gpu.sh` | what a GPU node can and cannot do, for a bug report |
 | `check_gstar4d.py` | smoke-tests gStar4D alone, to tell a broken build from an input it cannot handle |

@@ -21,6 +21,7 @@ JOBS = {
     "script/run_jitter.sbatch": "jitter_study",
     "script/run_scaling.sbatch": "scaling_study",
     "script/run_benchmark.sbatch": "benchmark",
+    "script/run_triangulate.sbatch": "triangulate",
 }
 
 

@@ -128,9 +128,18 @@ python main.py experiment=triangulate method=geodel ply=cloud.ply out=results/mi
 
 Writes `<out>/<cloud>_<method>/` with `points.npy`, `tets.npy` (indices into it), `mesh.vtk` for
 ParaView, and `summary.json` (timing, preprocessing, and the difference to CGAL with `check=true`).
-Methods: `paragram`, `gdel3d`, `gstar4d`, `dewall`, `geodel`, `cgal_parallel`, `cgal_sequential`.
 Duplicate points are removed and the cloud normalised into the unit cube as in the benchmark (the
 map back is in `summary.json`); no jitter is added unless asked (`jitter=1e-6`).
+
+`geodel`, `cgal_parallel` and `cgal_sequential` run on the CPU, so the commands above work on a
+login node. `paragram`, `gdel3d`, `gstar4d` and `dewall` need a GPU — on the cluster, submit them:
+
+```bash
+METHOD=gdel3d PLY=data/voronoi_jax_068.ply CHECK=true sbatch script/run_triangulate.sbatch
+METHOD=gstar4d PLY=cloud.ply OUT=results/mine JITTER=1e-6 sbatch script/run_triangulate.sbatch
+```
+
+The output lands in the same place; the job log is `results/triangulate.o<jobid>`.
 
 ## 📊 Results
 
