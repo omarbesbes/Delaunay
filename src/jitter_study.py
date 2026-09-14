@@ -32,8 +32,10 @@ it:
               cannot decide at all rather than ones it repairs
 
 GeoDel (Geogram) has the same counters behind a PCK_STATS build of Geogram, which the GeoDel wheel
-is not built with; Local DeWall and gStar4D have no exact fallback to count.  Those methods report
-no counters rather than zeros.
+is not built with.  gStar4D and Local DeWall do use exact predicates -- gStar4D compiles Shewchuk's
+predicates.c and evaluates them on the GPU, Local DeWall reports a need_exact_predict status -- but
+neither counts how often they are reached; instrumenting them would mean patching their kernels as
+patch_pygdel3d.py does for gDel3D.  All three report no counters rather than zeros.
 
 The jitter is the benchmark's: an independent Gaussian per coordinate with
 sigma = jitter x (largest extent of the bounding box), from a fixed seed, so a given

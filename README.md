@@ -210,7 +210,9 @@ Voronoi-to-Delaunay conversion against Qhull and is skipped where torch is absen
   the Voronoi cell clipping rather than something a perturbation can fix — but we have not verified
   that, and it is the obvious next experiment.
 - **GeoDel, Local DeWall and gStar4D report no predicate counters.** GeoDel would need a
-  `PCK_STATS` build of Geogram (~2× slower); the other two have no exact fallback to count. Those
+  `PCK_STATS` build of Geogram (~2× slower). gStar4D and Local DeWall *do* use exact predicates
+  (gStar4D compiles Shewchuk's `predicates.c`), but neither counts how often they are reached;
+  instrumenting them means patching their kernels, as `patch_pygdel3d.py` does for gDel3D. Those
   cells above are honest gaps, not zeros.
 - **Local DeWall's spike at 800 000 points** lives entirely in post-processing (3 607 ms of
   3 873 ms) with identical post-point counts and clean status counters. The root cause is still

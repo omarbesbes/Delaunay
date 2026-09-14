@@ -139,7 +139,7 @@ of that perturbation on the two point clouds only, and records, for every value:
 | CGAL | filtered-predicate calls vs filter failures | `-DCGAL_PROFILE` build `bin/cgal_delaunay_profile`, run untimed and single-threaded so the counts are reproducible |
 | Paragram + conversion | in-sphere determinants inside the float64 rounding-error bound | `voronoi_to_delaunay.last_insphere_stats()`; there is no exact fallback, so these are tests it cannot decide at all |
 | GeoDel | — | would need a `PCK_STATS` build of Geogram, which the wheel is not built with |
-| Local DeWall, gStar4D | — | no exact fallback to count |
+| Local DeWall, gStar4D | — | they use exact predicates (gStar4D compiles Shewchuk's `predicates.c`) but expose no usage counter; instrumenting them means patching their kernels |
 
 ```bash
 sbatch script/run_jitter.sbatch                                     # 0, 1e-9 .. 1e-3 on both clouds
