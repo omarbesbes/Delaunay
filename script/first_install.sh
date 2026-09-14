@@ -57,8 +57,12 @@ import CGAL.CGAL_Triangulation_3  # noqa: F401
 
 archs = torch.cuda.get_arch_list()
 print("torch", torch.__version__, "| CUDA", torch.version.cuda, "| CGAL bindings OK")
-print("torch has kernels for:", archs)
-if "sm_70" not in archs:
+if not archs:
+    # Without a driver (a login node) torch cannot list its kernels; the GPU job prints them.
+    print("torch kernel list: not available here (no NVIDIA driver on this node); checked in the job")
+else:
+    print("torch has kernels for:", archs)
+if archs and "sm_70" not in archs:
     print(
         "NOTE: no sm_70 kernels -> the V100 partitions (gpu, gpu_test) cannot run Paragram or gDel3D\n"
         "      with this build. Use --partition=gpua100 (A100, sm_80), or reinstall with\n"

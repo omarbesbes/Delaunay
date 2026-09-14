@@ -26,6 +26,8 @@ dist/
 .eggs/
 
 # --- tooling ----------------------------------------------------------------------------
+# nvcc temporaries when the cluster has no scratch space (script/build_tools.sh)
+.cache/
 # prettier (a pre-commit hook) drops a node_modules cache into the repository
 node_modules/
 .pytest_cache/

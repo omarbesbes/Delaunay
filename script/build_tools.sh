@@ -29,6 +29,35 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
+# nvcc writes large intermediates to $TMPDIR.  On a shared login node /tmp is small and shared,
+# and a full /tmp kills nvcc with a bus error (SIGBUS on a memory-mapped temp file) rather than a
+# message.  Use the scratch space when the cluster provides it, the repository otherwise.
+export TMPDIR=${TMPDIR:-${WORKDIR:-$PWD}/.cache/nvcc-tmp}
+mkdir -p "$TMPDIR"
+
+# Runs a CUDA build and, if the compiler itself dies (bus error, killed), says what that means on
+# this cluster instead of leaving a bare "core dumped" line.
+cuda_build() {
+  "$@" && return 0
+  local rc=$?
+  if [ "$rc" -ge 128 ]; then
+    cat >&2 <<MSG
+-- the compiler was killed (exit $rc: signal $((rc - 128)))
+
+   On a shared login node this is almost always the node, not the code: /tmp full, or the
+   per-process memory limit hit by a large CUDA translation unit built for several
+   architectures.  The same command has built fine on this cluster.  Try, in order:
+
+     bash script/build_tools.sh                          # simply again (transient)
+     GPU_ARCHS=8.0 bash script/build_tools.sh            # one architecture: half the memory
+     TMPDIR=\$WORKDIR/tmp bash script/build_tools.sh     # if /tmp is the problem
+
+   The A100 partition (gpua100) only needs sm_80, so GPU_ARCHS=8.0 costs nothing there.
+MSG
+  fi
+  return "$rc"
+}
+
 # Keep only real X.Y entries (dropping any "+PTX" suffix) that this nvcc actually supports.
 SUPPORTED=$(nvcc --list-gpu-arch 2>/dev/null | sed 's/compute_//' | paste -sd, -)
 SM=""
@@ -101,7 +130,7 @@ if [ "$FORCE" = "--force" ] || [ ! -x bin/dewall ]; then
   clone_or_explain https://github.com/WuhengGao/Local-DeWall.git third_party/Local-DeWall
   $PY script/patch_dewall.py third_party/Local-DeWall
   D=third_party/Local-DeWall
-  nvcc -O3 -std=c++17 -rdc=true -I$D/include $GENCODE -Xcompiler -fopenmp \
+  cuda_build nvcc -O3 -std=c++17 -rdc=true -I$D/include $GENCODE -Xcompiler -fopenmp \
     -diag-suppress 20054,68 \
     $D/src/delaunay_kernels.cu $D/src/delaunay_solver.cu $D/src/spatial_hash.cu $D/src/main_delaunay.cu \
     -x cu $D/src/sampler.cpp -o bin/dewall -lgomp
@@ -117,7 +146,7 @@ if [ "$FORCE" = "--force" ] || [ ! -x bin/gstar4d ]; then
   # --build --run compiles predicates.c as C, then everything else with nvcc, echoing both
   # commands and checking each output file (no shell in between: the login node's BASH_ENV
   # sources the module system, which does not survive a piped-and-traced script)
-  $PY script/patch_gstar4d.py third_party/gStar4D --build --run --arch="$GS_ARCHS" \
+  cuda_build $PY script/patch_gstar4d.py third_party/gStar4D --build --run --arch="$GS_ARCHS" \
     --out=bin/gstar4d --cc="${CC:-cc}"
 else
   echo "-- bin/gstar4d present"
