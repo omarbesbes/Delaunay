@@ -35,7 +35,7 @@ if command -v module >/dev/null 2>&1; then
   set -u
 fi
 if ! command -v conda >/dev/null 2>&1; then
-  for _c in "${CONDA_ROOT:-}" "$HOME/miniconda3" "$HOME/miniforge3" "$HOME/anaconda3" \
+  for _c in "${CONDA_ROOT:-}" "$HOME/miniforge3" "$HOME/miniconda3" "$HOME/anaconda3" \
             /opt/conda /usr/local/miniconda3; do
     if [ -n "$_c" ] && [ -x "$_c/bin/conda" ]; then
       export PATH="$_c/bin:$PATH"
@@ -82,7 +82,11 @@ if [ ! -d "$DELAUNAY_ENV" ] && [ "${CREATE:-0}" = "1" ]; then
     mkdir -p "$CONDA_PKGS_DIRS"
   fi
   echo "-- creating $DELAUNAY_ENV (python 3.12, CUDA 12.8, GCC 13, CGAL, TBB)"
-  conda create -y -p "$DELAUNAY_ENV" -c conda-forge \
+  # --override-channels: take everything from conda-forge and ignore whatever default channels the
+  # local conda is configured with.  Anaconda's own channels require accepting their terms of
+  # service (which stops the install outright) and restrict commercial use; conda-forge does not.
+  # It also avoids mixing two channels, a classic source of ABI mismatches.
+  conda create -y -p "$DELAUNAY_ENV" --override-channels -c conda-forge \
     python=3.12 "cuda-toolkit=12.8" "cuda-nvcc=12.8" gxx_linux-64=13 gcc_linux-64=13 \
     cmake ninja tbb tbb-devel gmp mpfr cgal-cpp boost-cpp git
 fi

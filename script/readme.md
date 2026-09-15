@@ -22,7 +22,7 @@ The scripts run on both clusters we have used; `env.sh` finds conda either way.
 
 | | Ruche (Mesocentre) | DGX (CentraleSupelec) |
 |---|---|---|
-| conda | `module load anaconda3/...`, done by `env.sh` | **none provided** -- install miniconda once with `INSTALL_CONDA=1` |
+| conda | `module load anaconda3/...`, done by `env.sh` | **none provided** -- install miniforge once with `INSTALL_CONDA=1` |
 | environment | `$WORKDIR/envs/delaunay` | `$HOME/envs/delaunay` |
 | GPU partition | `gpua100` (full A100 40 GB) | `prod10`, `prod20`, `prod40`, `prod80` (MIG slices) |
 
@@ -31,8 +31,14 @@ and TBB come from conda-forge and cannot be installed with pip. The first instal
 therefore
 
 ```bash
-INSTALL_CONDA=1 bash script/first_install.sh     # installs miniconda in $HOME, then the rest
+INSTALL_CONDA=1 bash script/first_install.sh     # installs miniforge in $HOME, then the rest
 ```
+
+Miniforge rather than Miniconda: every package here comes from conda-forge, which Miniforge uses by
+default. Anaconda's own channels would additionally require accepting their terms of service --
+which stops `conda create` outright -- and restrict commercial use by large organisations. The
+environment is created with `--override-channels -c conda-forge` for the same reason, so an
+existing Miniconda works too.
 
 `CONDA_ROOT` puts miniconda somewhere other than `$HOME/miniconda3`, and `DELAUNAY_ENV` moves the
 environment itself -- together they need a few GB, which a home quota may not have.

@@ -20,14 +20,22 @@ ARCHS=${GPU_ARCHS:-${TORCH_CUDA_ARCH_LIST:-"7.0;8.0"}}   # V100 (sm_70) and A100
 echo "== [1/7] conda environment"
 # The DGX ships no conda (it documents plain venv), and pip cannot provide nvcc, GCC 13, the CGAL
 # headers or TBB.  INSTALL_CONDA=1 bootstraps miniconda into the user's home, once.
-CONDA_ROOT=${CONDA_ROOT:-$HOME/miniconda3}
-if [ "${INSTALL_CONDA:-0}" = "1" ] && ! command -v conda >/dev/null 2>&1 \
-   && [ ! -x "$CONDA_ROOT/bin/conda" ]; then
-  echo "-- installing miniconda into $CONDA_ROOT (a few hundred MB)"
-  curl -fsSLo /tmp/miniconda-$$.sh \
-    https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-  bash /tmp/miniconda-$$.sh -b -p "$CONDA_ROOT"
-  rm -f /tmp/miniconda-$$.sh
+CONDA_ROOT=${CONDA_ROOT:-$HOME/miniforge3}
+if [ "${INSTALL_CONDA:-0}" = "1" ] && ! command -v conda >/dev/null 2>&1; then
+  # Do not install a second one next to a conda that env.sh would have found anyway.
+  for c in "$CONDA_ROOT" "$HOME/miniforge3" "$HOME/miniconda3" "$HOME/anaconda3" /opt/conda; do
+    [ -x "$c/bin/conda" ] && { CONDA_ROOT=$c; break; }
+  done
+  if [ ! -x "$CONDA_ROOT/bin/conda" ]; then
+    # Miniforge rather than Miniconda: it defaults to conda-forge, which is the only channel this
+    # project uses, and carries none of the Anaconda terms-of-service prompts or the commercial-use
+    # restrictions that apply to an institution.
+    echo "-- installing miniforge into $CONDA_ROOT (a few hundred MB)"
+    curl -fsSLo /tmp/miniforge-$$.sh \
+      https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
+    bash /tmp/miniforge-$$.sh -b -p "$CONDA_ROOT"
+    rm -f /tmp/miniforge-$$.sh
+  fi
 fi
 export CONDA_ROOT
 CREATE=1 . script/env.sh
