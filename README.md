@@ -32,8 +32,9 @@ Collecting the required metrics involved instrumenting some of the libraries
 kernels; CGAL is built with `-DCGAL_PROFILE`), because the upstream implementations do not expose
 all the measurements required by the study. A second, optional patch
 ([`script/patch_pygdel3d_final_flip.py`](script/patch_pygdel3d_final_flip.py)) fixes a gDel3D bug
-on small inputs -- below a few dozen points it skipped its last flipping round and returned the
-raw insertion result. The published behaviour stays available for comparison
+on small inputs: whenever the last insertion round inserts at least 10 % of the points -- always
+below a dozen points, still at 200 -- it skipped its last flipping round, and returned the raw
+insertion result, hung, or aborted. The published behaviour stays available for comparison
 (`GDEL3D_ORIGINAL=1`), and every gDel3D result records which of the two produced it; see
 [`script/readme.md`](script/readme.md).
 
