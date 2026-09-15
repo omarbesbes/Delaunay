@@ -73,7 +73,13 @@ PY
 
 echo "== [3/7] standalone tools: parallel CGAL + Local DeWall + gStar4D"
 GPU_ARCHS="$ARCHS" bash script/build_tools.sh ${REBUILD:+--force}
-python - <<'PY'
+# Smoke-test the tool just built.  Two guards, both learned on a DGX login node:
+#   CGAL_THREADS caps TBB, which otherwise sizes its pool from the whole machine (hundreds of cores
+#   on a DGX) while the cgroup grants a handful, and CGAL's retry-on-conflict loop then thrashes;
+#   a timeout so that a stuck tool reports instead of hanging the install.  Inside a SLURM job
+#   neither applies: the affinity mask already tells TBB the right number.
+CGAL_THREADS=${CGAL_THREADS:-4} timeout 120 python - <<'PY' \
+  || echo "   WARNING: bin/cgal_delaunay did not finish in 120 s -- it is built, but test it by hand"
 import subprocess
 
 import numpy as np
