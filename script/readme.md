@@ -60,23 +60,29 @@ existing Miniconda works too.
 `CONDA_ROOT` puts miniconda somewhere other than `$HOME/miniconda3`, and `DELAUNAY_ENV` moves the
 environment itself -- together they need a few GB, which a home quota may not have.
 
-The `#SBATCH` directives in the job files target Ruche. On the DGX, override them on the command
-line -- `sbatch` flags win over the directives in the file:
+The `#SBATCH` directives in the job files target Ruche. On the DGX, override the partition on the
+command line -- `sbatch` flags win over the directives in the file:
 
 ```bash
-# a full A100 (80 GB): the only DGX partition that allows 8 CPUs, which the CPU methods want
-sbatch --partition=prod80 --gres=gpu:A100.80gb:1 --cpus-per-task=8 --mem=64G \
-       script/run_jitter.sbatch
+METHOD=gdel3d PLY=data/voronoi_iarpa_001.ply JITTER=1e-6 CHECK=true \
+  sbatch --partition=prod80 --export=ALL,CGAL_THREADS=8 script/run_triangulate.sbatch
 
-# a 40 GB slice, 4 CPUs
-sbatch --partition=prod40 --gres=gpu:3g.40gb:1 --cpus-per-task=4 --mem=32G \
-       script/run_benchmark.sbatch
+sbatch --partition=prod40 script/run_jitter.sbatch
 ```
 
-On the DGX the number of CPUs is bounded by the MIG slice (4 per `1g.10gb`, 8 for a full
-`A100.80gb`), so `--cpus-per-task` must be lowered together with the partition. The CPU methods
-(GeoDel, CGAL parallel) then have fewer threads, which changes their timings -- worth stating if
-results from the two clusters are compared.
+Override the partition and nothing else. The GRES name is cluster-specific -- `sinfo -o "%P %G"`
+reports `gpu:nvidia_a100-sxm4...` here, not the `A100.80gb` that the upstream template's example
+uses -- and naming it wrongly fails with *Requested node configuration is not available*. The
+files' plain `--gres=gpu:1` lets SLURM pick the slice that belongs to the partition.
+
+`CGAL_THREADS` is worth passing on this cluster: the node has 128 cores, and if the affinity mask
+does not narrow TBB to the allocated CPUs, `bin/cgal_delaunay` stops making progress (see above).
+
+The partitions are MIG slices of one A100: `prod10`, `prod40`, `prod80` and `interactive10`,
+11 slices in total. VRAM is rarely the constraint here -- gDel3D uses 0.78 GB for a 100 000-point
+cloud -- so `prod10` is enough for a single triangulation and is the most available. Note that the
+CPU methods (GeoDel, CGAL parallel) get whatever `--cpus-per-task` grants, so timings from the two
+clusters are only comparable at equal thread counts.
 
 Every job is submitted from the repository root: `sbatch script/run_jitter.sbatch`. Environment
 variables at the top of each script (`REPEATS`, `METHODS`, `JITTERS`, ...) narrow a run without
