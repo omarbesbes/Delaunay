@@ -136,3 +136,9 @@ benchmark's own wrapper and checks each result independently: every circumsphere
 boundary faces closing a convex surface, the summed volume equal to the enclosed one. To make the
 patch part of a fresh install, add `python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D`
 after the `patch_pygdel3d.py` line of `first_install.sh`.
+
+Verified on the DGX (job 8419, `interactive10`): all 13 cases pass. The cube comes out as 9
+tetrahedra, 6 of them real and 3 flat -- zero-volume tetrahedra on the cube's co-planar faces,
+the same artefact of gDel3D's symbolic perturbation as the 14 980 flat tetrahedra on
+`voronoi_iarpa_001`; the volume covered is the cube's, and `degenerate_tets` in the benchmark
+table will read 3 for it. The jittered cube gives CGAL's 10.
