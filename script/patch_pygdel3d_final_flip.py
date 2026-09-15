@@ -139,11 +139,12 @@ def patch(repo: str) -> bool:
 
 def rebuild(repo: str) -> bool:
     # first_install.sh's line, forced: pip otherwise sees the package as installed and keeps the
-    # old extension.  The patched setup.py reads the architectures from TORCH_CUDA_ARCH_LIST;
-    # default it the way first_install.sh does (GPU_ARCHS, else V100 + A100) so the build does
-    # not depend on a GPU being visible from the login node.
+    # old extension.  The patched setup.py reads the architectures from TORCH_CUDA_ARCH_LIST,
+    # which is set the way first_install.sh sets it: from GPU_ARCHS (default V100 + A100), never
+    # inherited -- activating the environment exports a 13-architecture list that makes the
+    # build take ten times longer.
     env = dict(os.environ)
-    env.setdefault("TORCH_CUDA_ARCH_LIST", env.get("GPU_ARCHS", "7.0;8.0"))
+    env["TORCH_CUDA_ARCH_LIST"] = env.get("GPU_ARCHS", "7.0;8.0")
     cmd = [
         sys.executable, "-m", "pip", "install", "-q", "--force-reinstall",
         "--no-build-isolation", "--no-deps", repo,
