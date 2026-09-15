@@ -162,10 +162,22 @@ patch is idempotent and independent of the order with `patch_pygdel3d.py`. To ma
 fresh install, add `python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D` after the
 `patch_pygdel3d.py` line of `first_install.sh`.
 
-Observed with the two-mode check on the DGX (job 8429, up to the hang): `original` fails on
-cube8, cube8+jitter and the random sets of 9, 10 and 12 points, each with `skipped=1`; from 16
-points on, upstream's own 10 % rule fires (`skipped=0`) and the two modes return the same
-triangulation; every `corrected` row passes.
+Observed with the two-mode check on the DGX (job 8432), 13 cases, upstream behaviour
+(`GDEL3D_ORIGINAL=1`):
+
+| points | upstream gDel3D | corrected |
+|---|---|---|
+| 8 (cube), 8 (jittered cube), 9, 10, 12 | wrong result: the raw insertion output, `skipped=1` | ok |
+| 32 | **hangs** (killed after 120 s) | ok, 110 tetrahedra |
+| 48, 200 | **aborts** (`exit -6`, SIGABRT: an assertion in the C++ code) | ok, 212 / 1 127 tetrahedra |
+| 16, 24, 64, 100, 500 | ok, `skipped=0` | ok, identical tetrahedron counts (43, 81, 309, 518, 3 030) |
+
+Three failure modes, not one, and not confined to a dozen points: 200 points abort. What decides
+is not the size but the last insertion round -- when it inserts at least 10 % of the points the
+final pass is skipped, and what follows depends on what the earlier rounds had already marked as
+non-Delaunay: nothing (the wrong result is returned silently), or facets handed to the CPU
+star-splaying repair, which loops or asserts on an inconsistent complex. The corrected build
+passes all 13 and returns exactly upstream's triangulation wherever upstream succeeds.
 
 Verified on the DGX (job 8419, `interactive10`), first version: all 13 cases pass. The cube comes
 out as 9 tetrahedra, 6 of them real and 3 flat -- zero-volume tetrahedra on the cube's co-planar
