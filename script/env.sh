@@ -7,8 +7,9 @@
 # Knobs:
 #   DELAUNAY_ENV   where the environment lives.  Default: $WORKDIR/envs/delaunay where the cluster
 #                  provides $WORKDIR (Ruche), $HOME/envs/delaunay otherwise (CentraleSupelec's DGX).
-#   CONDA_MODULE   module to load to get conda on the PATH, when conda is not already there
-#                  (Ruche needs it; the DGX has conda installed).
+#   CONDA_MODULE   module that puts conda on the PATH, when conda is not already there (Ruche).
+#   CONDA_ROOT     a conda installed in the home directory, when the cluster ships none (the
+#                  DGX documents plain venv); default $HOME/miniconda3.
 #   GPU_ARCHS      CUDA architectures to build for, "7.0;8.0" by default (V100 and A100).
 #
 # Everything below is written to work on both clusters: nothing here may assume $WORKDIR exists or
@@ -18,8 +19,12 @@ DELAUNAY_ENV=${DELAUNAY_ENV:-${WORKDIR:-$HOME}/envs/delaunay}
 CONDA_MODULE=${CONDA_MODULE:-anaconda3/2023.09-0/none-none}
 
 # --- put conda on the PATH ----------------------------------------------------------------
-# `module` is a shell function, which command -v finds.  Ruche needs it; on a machine where conda
-# is already available this whole block is skipped.
+# Three ways a cluster provides conda, tried in order:
+#   1. it is already on the PATH;
+#   2. an environment module puts it there (Ruche);
+#   3. it is installed somewhere in the user's home (the DGX documents plain venv and ships no
+#      conda, so one has to be installed there).
+# `module` is a shell function, which command -v finds.
 if ! command -v conda >/dev/null 2>&1 && command -v module >/dev/null 2>&1; then
   set +u
   module purge >/dev/null 2>&1 || true
@@ -27,9 +32,34 @@ if ! command -v conda >/dev/null 2>&1 && command -v module >/dev/null 2>&1; then
   set -u
 fi
 if ! command -v conda >/dev/null 2>&1; then
-  echo "conda not found." >&2
-  echo "  If your cluster provides it through modules, set CONDA_MODULE to the right module name;" >&2
-  echo "  otherwise install miniconda and make sure 'conda' is on the PATH." >&2
+  for _c in "${CONDA_ROOT:-}" "$HOME/miniconda3" "$HOME/miniforge3" "$HOME/anaconda3" \
+            /opt/conda /usr/local/miniconda3; do
+    if [ -n "$_c" ] && [ -x "$_c/bin/conda" ]; then
+      export PATH="$_c/bin:$PATH"
+      break
+    fi
+  done
+  unset _c
+fi
+if ! command -v conda >/dev/null 2>&1; then
+  cat >&2 <<'MSG'
+conda not found, and this project needs it: nvcc, GCC 13, the CGAL headers and TBB come from
+conda-forge and cannot be installed with pip into a plain venv.
+
+If your cluster provides conda through modules, set CONDA_MODULE to the module name. Otherwise
+install miniconda once in your home directory (no administrator rights needed), either by
+letting the install script do it:
+
+    INSTALL_CONDA=1 bash script/first_install.sh
+
+or by hand:
+
+    curl -fsSLo /tmp/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+    bash /tmp/miniconda.sh -b -p "$HOME/miniconda3" && rm /tmp/miniconda.sh
+
+Set CONDA_ROOT to install it somewhere other than $HOME/miniconda3 -- the environment and its CUDA
+toolkit need a few GB, which a home quota may not have.
+MSG
   return 1 2>/dev/null || exit 1
 fi
 

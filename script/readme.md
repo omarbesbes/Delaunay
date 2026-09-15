@@ -22,9 +22,20 @@ The scripts run on both clusters we have used; `env.sh` finds conda either way.
 
 | | Ruche (Mesocentre) | DGX (CentraleSupelec) |
 |---|---|---|
-| conda | `module load anaconda3/...`, done by `env.sh` | already on the PATH |
+| conda | `module load anaconda3/...`, done by `env.sh` | **none provided** -- install miniconda once with `INSTALL_CONDA=1` |
 | environment | `$WORKDIR/envs/delaunay` | `$HOME/envs/delaunay` |
 | GPU partition | `gpua100` (full A100 40 GB) | `prod10`, `prod20`, `prod40`, `prod80` (MIG slices) |
+
+The DGX documents a plain Python `venv`, which is not enough here: nvcc, GCC 13, the CGAL headers
+and TBB come from conda-forge and cannot be installed with pip. The first install there is
+therefore
+
+```bash
+INSTALL_CONDA=1 bash script/first_install.sh     # installs miniconda in $HOME, then the rest
+```
+
+`CONDA_ROOT` puts miniconda somewhere other than `$HOME/miniconda3`, and `DELAUNAY_ENV` moves the
+environment itself -- together they need a few GB, which a home quota may not have.
 
 The `#SBATCH` directives in the job files target Ruche. On the DGX, override them on the command
 line -- `sbatch` flags win over the directives in the file:

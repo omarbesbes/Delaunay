@@ -18,6 +18,18 @@ mkdir -p bin third_party results    # git-ignored, absent in a fresh clone
 ARCHS=${GPU_ARCHS:-${TORCH_CUDA_ARCH_LIST:-"7.0;8.0"}}   # V100 (sm_70) and A100 (sm_80)
 
 echo "== [1/7] conda environment"
+# The DGX ships no conda (it documents plain venv), and pip cannot provide nvcc, GCC 13, the CGAL
+# headers or TBB.  INSTALL_CONDA=1 bootstraps miniconda into the user's home, once.
+CONDA_ROOT=${CONDA_ROOT:-$HOME/miniconda3}
+if [ "${INSTALL_CONDA:-0}" = "1" ] && ! command -v conda >/dev/null 2>&1 \
+   && [ ! -x "$CONDA_ROOT/bin/conda" ]; then
+  echo "-- installing miniconda into $CONDA_ROOT (a few hundred MB)"
+  curl -fsSLo /tmp/miniconda-$$.sh \
+    https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+  bash /tmp/miniconda-$$.sh -b -p "$CONDA_ROOT"
+  rm -f /tmp/miniconda-$$.sh
+fi
+export CONDA_ROOT
 CREATE=1 . script/env.sh
 export TORCH_CUDA_ARCH_LIST=$ARCHS
 echo "environment: $CONDA_PREFIX"

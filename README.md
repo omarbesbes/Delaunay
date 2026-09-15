@@ -68,6 +68,10 @@ bash script/first_install.sh     # conda env, torch, the six libraries, the comp
 source script/env.sh             # activate it in a new shell
 ```
 
+On a cluster that provides no conda (CentraleSupélec's DGX documents a plain `venv`, which cannot
+supply nvcc, GCC 13, the CGAL headers or TBB), install it once in your home directory with
+`INSTALL_CONDA=1 bash script/first_install.sh`.
+
 `first_install.sh` clones and patches the upstream libraries rather than vendoring them: three of
 the six need source changes to build on this cluster or to report what we measure, and each patch
 explains why at the top of its file. Expect 15–30 minutes, most of it compiling CUDA.
