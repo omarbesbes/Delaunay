@@ -156,6 +156,28 @@ METHOD=gstar4d PLY=cloud.ply OUT=results/mine JITTER=1e-6 sbatch script/run_tria
 
 The output lands in the same place; the job log is `results/triangulate.o<jobid>`.
 
+### gDel3D: corrected, or as published
+
+The installed gDel3D carries the fix for its skipped last flipping round (see the note above).
+It is the default; one environment variable brings back the published behaviour, for any entry
+point -- `main.py`, the `sbatch` files, `--verify`:
+
+```bash
+python main.py experiment=triangulate method=gdel3d ply=cloud.ply check=true                     # corrected (default)
+GDEL3D_ORIGINAL=1 python main.py experiment=triangulate method=gdel3d ply=cloud.ply check=true   # as published
+
+sbatch script/run_benchmark.sbatch                     # corrected
+GDEL3D_ORIGINAL=1 sbatch script/run_benchmark.sbatch   # as published -- what the reference campaign ran
+```
+
+Which one produced a result is written into it, not left to memory: gDel3D's statistics carry
+`finalRoundSkippedNum` -- 1 when the published behaviour skipped the round, 0 when it ran. In
+`summary.json` it is `method_info.stats_ms.finalRoundSkippedNum`; in the benchmark and jitter JSON
+files, the `stats_ms` block of every gDel3D measurement. On the two 100 000-point clouds the two
+behaviours give the same triangulation in the same time; they differ only on small inputs, where
+the published one returns an incomplete result, hangs, or aborts
+([`script/readme.md`](script/readme.md) has the measurements).
+
 
 
 ## 🧪 Tests
