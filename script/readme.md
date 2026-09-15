@@ -60,20 +60,35 @@ existing Miniconda works too.
 `CONDA_ROOT` puts miniconda somewhere other than `$HOME/miniconda3`, and `DELAUNAY_ENV` moves the
 environment itself -- together they need a few GB, which a home quota may not have.
 
-The `#SBATCH` directives in the job files target Ruche. On the DGX, override the partition on the
-command line -- `sbatch` flags win over the directives in the file:
+The `#SBATCH` directives in the job files target Ruche. On the DGX, override the partition *and*
+switch the GPU request off -- `sbatch` flags win over the directives in the file:
 
 ```bash
 METHOD=gdel3d PLY=data/voronoi_iarpa_001.ply JITTER=1e-6 CHECK=true \
-  sbatch --partition=prod80 --export=ALL,CGAL_THREADS=8 script/run_triangulate.sbatch
+  sbatch --partition=prod10 --gres=none --cpus-per-task=4 script/run_triangulate.sbatch
 
-sbatch --partition=prod40 script/run_jitter.sbatch
+sbatch --partition=prod40 --gres=none script/run_jitter.sbatch
 ```
 
-Override the partition and nothing else. The GRES name is cluster-specific -- `sinfo -o "%P %G"`
-reports `gpu:nvidia_a100-sxm4...` here, not the `A100.80gb` that the upstream template's example
-uses -- and naming it wrongly fails with *Requested node configuration is not available*. The
-files' plain `--gres=gpu:1` lets SLURM pick the slice that belongs to the partition.
+`--gres=none` is the part that is easy to get wrong. On the DGX a job does not ask for a GPU at
+all: the partition *is* the GPU request, and the MIG slice is attached by the scheduler
+(`~/slurm-prod10.sbatch`, the template the cluster installs in every home directory, has no
+`--gres` line). Any explicit `--gres` is refused -- `gpu:1` by the submit plugin with *only
+A100.80gb GRES in partition prod80*, and every specific name, including the `A100.80gb` that the
+plugin's own message quotes, with *Requested node configuration is not available*. Since Ruche does
+need `--gres=gpu:1`, the directive stays in the files and `--gres=none` cancels it here.
+
+Each partition also caps the CPUs per GPU slice, and the files ask for 8: `prod10` allows 4, so it
+needs `--cpus-per-task=4` as well. The submit plugin names the cap in its refusal (*too many CPUs
+requested for partition prod10 (max. 4 for 1 requested GPU(s))*), so there is nothing to look up --
+read it off the error and resubmit. The jobs derive their thread counts from
+`$SLURM_CPUS_PER_TASK`, so a smaller allocation is measured correctly, just with fewer threads.
+
+`--test-only` answers both questions in a second, without queueing anything:
+
+```bash
+sbatch --test-only --partition=prod10 --gres=none --cpus-per-task=4 script/run_triangulate.sbatch
+```
 
 `CGAL_THREADS` is worth passing on this cluster: the node has 128 cores, and if the affinity mask
 does not narrow TBB to the allocated CPUs, `bin/cgal_delaunay` stops making progress (see above).
