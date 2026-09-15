@@ -148,10 +148,19 @@ sbatch --partition=prod10 --gres=none --cpus-per-task=4 --time=00:10:00 --job-na
 benchmark's own wrapper, **in both modes**, and checks each result independently: every
 circumsphere empty, the boundary faces closing a convex surface, the summed volume equal to the
 enclosed one. The `original` rows show the bug (and `skipped=1`), the `corrected` rows decide the
-exit status. The script also upgrades an installation carrying its first version (which had no
-switch); the patch is idempotent and independent of the order with `patch_pygdel3d.py`. To make it
-part of a fresh install, add `python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D`
-after the `patch_pygdel3d.py` line of `first_install.sh`.
+exit status. Each case runs in its own child process with a two-minute timeout, because the
+upstream behaviour does not only return wrong results: on 32 random points (seed 0) it **hangs**,
+inside the C++ where Ctrl-C cannot reach it -- the first run of the two-mode check had to be
+`scancel`led from another terminal. Such a case now prints as `hung: no result after 120 s`.
+The script also upgrades an installation carrying its first version (which had no switch); the
+patch is idempotent and independent of the order with `patch_pygdel3d.py`. To make it part of a
+fresh install, add `python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D` after the
+`patch_pygdel3d.py` line of `first_install.sh`.
+
+Observed with the two-mode check on the DGX (job 8429, up to the hang): `original` fails on
+cube8, cube8+jitter and the random sets of 9, 10 and 12 points, each with `skipped=1`; from 16
+points on, upstream's own 10 % rule fires (`skipped=0`) and the two modes return the same
+triangulation; every `corrected` row passes.
 
 Verified on the DGX (job 8419, `interactive10`), first version: all 13 cases pass. The cube comes
 out as 9 tetrahedra, 6 of them real and 3 flat -- zero-volume tetrahedra on the cube's co-planar

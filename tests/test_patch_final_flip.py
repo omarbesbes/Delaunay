@@ -416,3 +416,30 @@ def test_checker_flags_a_point_inside_a_circumsphere():
     problems, f = ff.check_triangulation(pts, [[0, 1, 2, 3]])
     assert f["violations"] == 1
     assert len(problems) == 1 and "circumsphere" in problems[0]
+
+
+# ---------------------------------------------------------------------------------------
+# --verify's case list (the GPU part itself runs only on a cluster)
+# ---------------------------------------------------------------------------------------
+def test_verify_cases_are_the_thirteen_documented_ones():
+    pytest.importorskip("torch")  # benchmark.py imports it
+    cases = ff.verify_cases(seed=0)
+    names = [n for n, _ in cases]
+    assert names[:2] == ["cube8", "cube8+jitter"]
+    assert names[2:] == [f"random-{n}" for n in ff.VERIFY_SIZES]
+    assert [len(p) for _, p in cases] == [8, 8, *ff.VERIFY_SIZES]
+    for _, p in cases:  # preprocessed like the benchmark: unit cube, float32-representable
+        assert p.min() >= 0.0 and p.max() <= 1.0
+        assert np.array_equal(p, p.astype(np.float32).astype(np.float64))
+    assert ff.verify_cases(seed=0)[3][1].tolist() == cases[3][1].tolist(), "deterministic"
+
+
+def test_child_arguments_are_parsed_and_hidden():
+    """--case/--mode/--seed exist for the child processes and stay out of --help."""
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit):
+        ff.main(["--help"])
+    assert "--case" not in buf.getvalue() and "--verify" in buf.getvalue()

@@ -356,16 +356,88 @@ def check_triangulation(points, tets) -> tuple[list[str], dict]:
     return problems, facts
 
 
-def verify(seed: int = 0) -> bool:
-    """Run the installed gDel3D, through the benchmark's own wrapper, on the inputs the bug hit.
+VERIFY_TIMEOUT = 120.0  # seconds per case and mode
+VERIFY_SIZES = (9, 10, 12, 16, 24, 32, 48, 64, 100, 200, 500)
 
-    Every case runs twice: with GDEL3D_ORIGINAL=1 (upstream's behaviour, shown for the record) and
-    without (the corrected one, which decides the exit status).  The `skipped` column is
-    finalRoundSkippedNum as reported by gDel3D itself.
-    """
+
+def verify_cases(seed: int = 0) -> list:
+    """The inputs the bug hit, preprocessed the way the benchmark does it: (name, points)."""
     import numpy as np
 
     sys.path.insert(0, os.path.join(ROOT, "src"))
+    import benchmark as T
+
+    rng = np.random.default_rng(seed)
+    cases = [
+        ("cube8", T.cube8()),
+        ("cube8+jitter", T.cube8() + rng.normal(scale=1e-3, size=(8, 3))),
+    ]
+    cases += [(f"random-{n}", rng.random((n, 3))) for n in VERIFY_SIZES]
+    return [(name, T.unit_cube(raw).astype(np.float32).astype(np.float64)) for name, raw in cases]
+
+
+def run_one(idx: int, mode: str, seed: int) -> dict:
+    """One case in one mode, in this process -- what the child started by verify() does."""
+    if mode == "original":
+        os.environ[SWITCH] = "1"
+    else:
+        os.environ.pop(SWITCH, None)
+    name, pts = verify_cases(seed)[idx]
+    import benchmark as T
+
+    tets, seconds, info = T.run_gdel3d(pts)
+    problems, facts = check_triangulation(pts, tets)
+    self_check = info.get("self_check")
+    if self_check is not True:
+        problems.append(f"gDel3D's own checker says {self_check}")
+    return {
+        "case": name,
+        "mode": mode,
+        "n": int(len(pts)),
+        "seconds": float(seconds),
+        "self_check": self_check,
+        "skipped": info.get("stats_ms", {}).get(STAT, "?"),
+        "problems": problems,
+        **facts,
+    }
+
+
+def run_child(idx: int, mode: str, seed: int) -> dict:
+    """run_one() in a child process, so that a build that hangs -- upstream gDel3D did, on 32
+    random points -- costs one timed-out row instead of the session.
+
+    SIGKILL after the timeout; the driver reclaims the CUDA context.
+    """
+    import json
+
+    env = dict(os.environ)
+    if mode == "original":
+        env[SWITCH] = "1"
+    else:
+        env.pop(SWITCH, None)
+    cmd = [
+        sys.executable, os.path.abspath(__file__),
+        "--case", str(idx), "--mode", mode, "--seed", str(seed),
+    ]  # fmt: skip
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=VERIFY_TIMEOUT, env=env)
+    except subprocess.TimeoutExpired:
+        return {"verdict": f"hung: no result after {VERIFY_TIMEOUT:.0f} s, killed"}
+    line = next((ln for ln in reversed(p.stdout.splitlines()) if ln.startswith("{")), None)
+    if p.returncode != 0 or line is None:
+        tail = (p.stderr.strip().splitlines() or ["no output"])[-1]
+        return {"verdict": f"crashed: exit {p.returncode} ({tail[:90]})"}
+    return json.loads(line)
+
+
+def verify(seed: int = 0) -> bool:
+    """Run the installed gDel3D, through the benchmark's own wrapper, on the inputs the bug hit.
+
+    Every case runs twice, each in its own child process with a timeout: with GDEL3D_ORIGINAL=1
+    (upstream's behaviour, shown for the record -- wrong results and, on some inputs, a hang) and
+    without (the corrected one, which decides the exit status).  The `skipped` column is
+    finalRoundSkippedNum as reported by gDel3D itself.
+    """
     import torch
 
     if not torch.cuda.is_available():
@@ -375,51 +447,36 @@ def verify(seed: int = 0) -> bool:
             f"  srun --partition=gpua100 --gres=gpu:1 --time=00:10:00 --pty python {rel} --verify"
         )
         return False
-    import benchmark as T
 
-    rng = np.random.default_rng(seed)
-    cases = [
-        ("cube8", T.cube8()),
-        ("cube8+jitter", T.cube8() + rng.normal(scale=1e-3, size=(8, 3))),
-    ]
-    cases += [
-        (f"random-{n}", rng.random((n, 3))) for n in (9, 10, 12, 16, 24, 32, 48, 64, 100, 200, 500)
-    ]
-
+    cases = verify_cases(seed)
     print(
         f"{'case':<14}{'mode':<10}{'N':>5}{'tets':>6}{'flat':>5}{'self-chk':>9}{'viol':>5}"
-        f"{'hull':>5}{'vol/hull':>9}{'skipped':>8}{'s':>7}  verdict"
+        f"{'hull':>5}{'vol/hull':>9}{'skipped':>8}{'s':>7}  verdict",
+        flush=True,
     )
     all_ok = True
-    for name, raw in cases:
-        pts = (
-            T.unit_cube(raw).astype(np.float32).astype(np.float64)
-        )  # the benchmark's preprocessing
+    for idx, (name, pts) in enumerate(cases):
         for mode in ("original", "corrected"):
-            if mode == "original":
-                os.environ[SWITCH] = "1"
+            r = run_child(idx, mode, seed)
+            prefix = "as upstream: " if mode == "original" else "FAIL: "
+            if "verdict" in r:  # hung or crashed: nothing to measure
+                ok = False
+                dash = "".join(f"{'-':>{w}}" for w in (6, 5, 9, 5, 5, 9, 8, 7))
+                print(
+                    f"{name:<14}{mode:<10}{len(pts):>5}{dash}  {prefix}{r['verdict']}", flush=True
+                )
             else:
-                os.environ.pop(SWITCH, None)
-            tets, seconds, info = T.run_gdel3d(pts)
-            problems, f = check_triangulation(pts, tets)
-            if info.get("self_check") is not True:
-                problems.append(f"gDel3D's own checker says {info.get('self_check')}")
-            ok = not problems
+                ok = not r["problems"]
+                ratio = r["volume"] / r["hull_volume"] if r.get("hull_volume") else float("nan")
+                verdict = "ok" if ok else prefix + "; ".join(r["problems"])
+                print(
+                    f"{name:<14}{mode:<10}{r['n']:>5}{r['tets']:>6}{r['flat']:>5}"
+                    f"{str(r['self_check']):>9}{r['violations']:>5}{'ok' if r['hull_ok'] else 'NO':>5}"
+                    f"{ratio:>9.4f}{str(r['skipped']):>8}{r['seconds']:>7.3f}  {verdict}",
+                    flush=True,
+                )
             if mode == "corrected":
                 all_ok &= ok
-            skipped = info.get("stats_ms", {}).get(STAT, "?")
-            ratio = f["volume"] / f["hull_volume"] if f.get("hull_volume") else float("nan")
-            verdict = (
-                "ok"
-                if ok
-                else ("as upstream: " if mode == "original" else "FAIL: ") + "; ".join(problems)
-            )
-            print(
-                f"{name:<14}{mode:<10}{len(pts):>5}{f['tets']:>6}{f['flat']:>5}"
-                f"{str(info.get('self_check')):>9}{f['violations']:>5}"
-                f"{'ok' if f['hull_ok'] else 'NO':>5}{ratio:>9.4f}{str(skipped):>8}{seconds:>7.3f}  {verdict}"
-            )
-    os.environ.pop(SWITCH, None)
     if not all_ok:
         print(
             "\nA corrected row failing with 5 tetrahedra and self-check False means the installed"
@@ -441,7 +498,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="run the installed build on small inputs (needs a GPU)",
     )
+    # verify()'s child processes: one case, one mode, a JSON line on stdout
+    ap.add_argument("--case", type=int, help=argparse.SUPPRESS)
+    ap.add_argument("--mode", choices=("original", "corrected"), help=argparse.SUPPRESS)
+    ap.add_argument("--seed", type=int, default=0, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+
+    if args.case is not None:
+        import json
+
+        print(
+            json.dumps(run_one(args.case, args.mode or "corrected", args.seed), default=str),
+            flush=True,
+        )
+        return 0
 
     ok = True
     if args.repo is not None or args.rebuild or not args.verify:
