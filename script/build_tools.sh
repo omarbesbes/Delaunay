@@ -1,6 +1,3 @@
-   Run this once on the LOGIN node, then resubmit the job:
-
-     cd $(pwd) && bash script/build_tools.sh
 #!/bin/bash
 # Build the standalone tools if they are missing (idempotent): the parallel CGAL tool, Local DeWall
 # and gStar4D.  Requires an activated environment (conda env with nvcc, CGAL headers, TBB).
