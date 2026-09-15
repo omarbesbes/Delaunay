@@ -28,27 +28,15 @@ echo "run_jitter: bash started on $(hostname -s) at $(date '+%F %T'), job ${SLUR
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:?submit directory not set: submit with sbatch, from the repository root}"
-set +u; module purge; module load anaconda3/2023.09-0/none-none; set -u
-ENV=${DELAUNAY_ENV:-$WORKDIR/envs/delaunay}
-export NVCC_PREPEND_FLAGS="${NVCC_PREPEND_FLAGS:-}" NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:-}"
-set +u; source activate "$ENV"; set -u
-export CUDA_HOME=$CONDA_PREFIX
-export CC=${CC:-x86_64-conda-linux-gnu-gcc} CXX=${CXX:-x86_64-conda-linux-gnu-g++}
-export PARAGRAM_MAX_PLANES=128 PARAGRAM_MAX_VERTS=128
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# shellcheck disable=SC1091
+. script/env.sh                     # conda env, compilers, CUDA paths, PYTHONPATH=src
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-# the studies live in src/ and import one another by plain module name
-export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
-CUDA_TARGET=$CONDA_PREFIX/targets/x86_64-linux
-[ -d "$CUDA_TARGET/include" ] && export CPATH="$CUDA_TARGET/include${CPATH:+:$CPATH}"
-[ -d "$CUDA_TARGET/lib" ] && export LIBRARY_PATH="$CUDA_TARGET/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
-[ -d "$CUDA_TARGET/lib/stubs" ] && export LIBRARY_PATH="${LIBRARY_PATH:+$LIBRARY_PATH:}$CUDA_TARGET/lib/stubs"
 
 # One JIT cache per architecture; read the capability from nvidia-smi (no CUDA context needed).
 ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
 [ -n "$ARCH" ] || ARCH=8.0
 export TORCH_CUDA_ARCH_LIST=$ARCH
-export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-$WORKDIR/.cache/torch_extensions_sm${ARCH//./}}
+export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-${WORKDIR:-$HOME}/.cache/torch_extensions_sm${ARCH//./}}
 mkdir -p "$TORCH_EXTENSIONS_DIR"
 echo "node: $(hostname -s)   CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 nvidia-smi --query-gpu=name,compute_cap,compute_mode,memory.total,memory.used --format=csv,noheader

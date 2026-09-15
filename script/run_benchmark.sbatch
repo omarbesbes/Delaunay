@@ -18,29 +18,9 @@
 #          GeoDel / Geogram (CPU-parallel), CGAL parallel (TBB) and CGAL sequential.
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
-set +u; module purge; module load anaconda3/2023.09-0/none-none; set -u
-ENV=${DELAUNAY_ENV:-$WORKDIR/envs/delaunay}
-# conda activation scripts (cuda-nvcc) read variables that may be unset: relax "set -u" around them
-export NVCC_PREPEND_FLAGS="${NVCC_PREPEND_FLAGS:-}" NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:-}"
-set +u
-source activate "$ENV"
-set -u
-export CUDA_HOME=$CONDA_PREFIX
-export CC=${CC:-x86_64-conda-linux-gnu-gcc}
-export CXX=${CXX:-x86_64-conda-linux-gnu-g++}
-export PARAGRAM_MAX_PLANES=128 PARAGRAM_MAX_VERTS=128     # Paragram build variant (JIT, first import)
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# shellcheck disable=SC1091
+. script/env.sh                     # conda env, compilers, CUDA paths, PYTHONPATH=src
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-# the studies live in src/ and import one another by plain module name
-export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
-
-# conda-forge keeps the CUDA headers and libraries under $CONDA_PREFIX/targets/x86_64-linux, which
-# torch's JIT build does not add when compiling *host* code (ext.cpp): make them visible here.
-CUDA_TARGET=$CONDA_PREFIX/targets/x86_64-linux
-[ -d "$CUDA_TARGET/include" ] && export CPATH="$CUDA_TARGET/include${CPATH:+:$CPATH}"
-[ -d "$CUDA_TARGET/lib" ] && export LIBRARY_PATH="$CUDA_TARGET/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
-# the driver stub is a last resort for -lcuda; the real libcuda.so of the GPU node wins if present
-[ -d "$CUDA_TARGET/lib/stubs" ] && export LIBRARY_PATH="${LIBRARY_PATH:+$LIBRARY_PATH:}$CUDA_TARGET/lib/stubs"
 echo "cuda_runtime_api.h: $(ls "$CUDA_TARGET/include/cuda_runtime_api.h" 2>/dev/null || ls "$CONDA_PREFIX/include/cuda_runtime_api.h" 2>/dev/null || echo NOT FOUND)"
 REPEATS=${REPEATS:-10}
 # A run that takes longer than this is not of interest: the external tool (gStar4D, Local DeWall)
@@ -76,7 +56,7 @@ mkdir -p "$OUT"
 ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
 [ -n "$ARCH" ] || { echo "could not read compute_cap from nvidia-smi; falling back to 8.0"; ARCH=8.0; }
 export TORCH_CUDA_ARCH_LIST=$ARCH
-export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-$WORKDIR/.cache/torch_extensions_sm${ARCH//./}}
+export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-${WORKDIR:-$HOME}/.cache/torch_extensions_sm${ARCH//./}}
 mkdir -p "$TORCH_EXTENSIONS_DIR"
 echo "GPU compute capability: $ARCH | torch extension cache: $TORCH_EXTENSIONS_DIR"
 

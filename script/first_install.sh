@@ -1,46 +1,27 @@
 #!/bin/bash
-# One-time environment setup on the Ruche LOGIN node (needs internet; the compute nodes may not have it).
-# Creates a self-contained conda env in $WORKDIR with Python 3.12, CUDA 12.8 (nvcc), GCC 13, torch cu128,
-# CGAL headers + TBB, then builds: the parallel CGAL tool, Paragram (patched), pyGDel3D (patched),
-# Local DeWall (patched), gStar4D (patched) and GeoDel.
-# Usage:  bash script/first_install.sh        (takes ~15-30 min)
+# One-time environment setup, on a LOGIN node (it needs internet; compute nodes usually have none).
+# Creates a self-contained conda environment with Python 3.12, CUDA 12.8 (nvcc), GCC 13, torch
+# cu128, CGAL headers + TBB, then builds: the parallel CGAL tool, Paragram (patched), pyGDel3D
+# (patched), Local DeWall (patched), gStar4D (patched) and GeoDel.
+#
+#   bash script/first_install.sh                       # ~15-30 min
+#   DELAUNAY_ENV=~/envs/delaunay bash script/first_install.sh    # environment elsewhere
+#   GPU_ARCHS=8.0 bash script/first_install.sh         # build for one GPU generation only
+#
+# Portable between Ruche (Mesocentre) and CentraleSupelec's DGX: script/env.sh finds conda either
+# way and picks a default location for the environment.  See script/readme.md for the partitions.
 set -euo pipefail
 # the script lives in script/ but every path below is relative to the repository root
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 mkdir -p bin third_party results    # git-ignored, absent in a fresh clone
-: "${WORKDIR:?WORKDIR is not set (are you on Ruche?)}"
-ENV=${DELAUNAY_ENV:-$WORKDIR/envs/delaunay}
-ARCHS=${TORCH_CUDA_ARCH_LIST:-"7.0;8.0"}       # V100 (gpu, gpu_test) and A100 (gpua100)
+ARCHS=${GPU_ARCHS:-${TORCH_CUDA_ARCH_LIST:-"7.0;8.0"}}   # V100 (sm_70) and A100 (sm_80)
 
-echo "== [1/7] conda environment: $ENV"
-module purge
-set +u; module load anaconda3/2023.09-0/none-none; set -u
-export CONDA_PKGS_DIRS=$WORKDIR/.conda/pkgs      # keep the 50 GB home quota free
-mkdir -p "$CONDA_PKGS_DIRS"
-if [ ! -d "$ENV" ]; then
-  conda create -y -p "$ENV" -c conda-forge \
-    python=3.12 "cuda-toolkit=12.8" "cuda-nvcc=12.8" gxx_linux-64=13 gcc_linux-64=13 \
-    cmake ninja tbb tbb-devel gmp mpfr cgal-cpp boost-cpp git
-fi
-# conda activation scripts (cuda-nvcc) read variables that may be unset: relax "set -u" around them
-export NVCC_PREPEND_FLAGS="${NVCC_PREPEND_FLAGS:-}" NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:-}"
-set +u
-source activate "$ENV"
-set -u
-export CUDA_HOME=$CONDA_PREFIX
+echo "== [1/7] conda environment"
+CREATE=1 . script/env.sh
 export TORCH_CUDA_ARCH_LIST=$ARCHS
-
-# conda-forge keeps the CUDA headers and libraries under $CONDA_PREFIX/targets/x86_64-linux, which
-# torch's JIT build does not add when compiling *host* code (ext.cpp): make them visible here.
-CUDA_TARGET=$CONDA_PREFIX/targets/x86_64-linux
-[ -d "$CUDA_TARGET/include" ] && export CPATH="$CUDA_TARGET/include${CPATH:+:$CPATH}"
-[ -d "$CUDA_TARGET/lib" ] && export LIBRARY_PATH="$CUDA_TARGET/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
-# the driver stub is a last resort for -lcuda; the real libcuda.so of the GPU node wins if present
-[ -d "$CUDA_TARGET/lib/stubs" ] && export LIBRARY_PATH="${LIBRARY_PATH:+$LIBRARY_PATH:}$CUDA_TARGET/lib/stubs"
-echo "cuda_runtime_api.h: $(ls "$CUDA_TARGET/include/cuda_runtime_api.h" 2>/dev/null || ls "$CONDA_PREFIX/include/cuda_runtime_api.h" 2>/dev/null || echo NOT FOUND)"
-export CC=${CC:-x86_64-conda-linux-gnu-gcc}
-export CXX=${CXX:-x86_64-conda-linux-gnu-g++}
+echo "environment: $CONDA_PREFIX"
+echo "cuda_runtime_api.h: $(ls "$CONDA_PREFIX/targets/x86_64-linux/include/cuda_runtime_api.h" 2>/dev/null || ls "$CONDA_PREFIX/include/cuda_runtime_api.h" 2>/dev/null || echo NOT FOUND)"
 echo "python: $(python -V) | nvcc: $(nvcc --version | tail -1) | host compiler: $($CXX --version | head -1)"
 
 echo "== [2/7] python packages (torch cu128, numpy, scipy, matplotlib, cgal bindings)"
@@ -64,8 +45,8 @@ else:
     print("torch has kernels for:", archs)
 if archs and "sm_70" not in archs:
     print(
-        "NOTE: no sm_70 kernels -> the V100 partitions (gpu, gpu_test) cannot run Paragram or gDel3D\n"
-        "      with this build. Use --partition=gpua100 (A100, sm_80), or reinstall with\n"
+        "NOTE: no sm_70 kernels -> a V100 partition cannot run Paragram or gDel3D with this\n"
+        "      build. Use an A100 partition (sm_80), or reinstall with\n"
         "        TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 REBUILD=1 bash script/first_install.sh"
     )
 PY

@@ -50,8 +50,10 @@ Full analysis in [`docs/jitter_sweep.md`](docs/jitter_sweep.md).
 ## 💻 Environment requirements
 
 Tested on **Ruche** (Mésocentre Paris-Saclay): NVIDIA A100-SXM4 40 GB, CUDA 12.8, 8 CPU cores,
-Python 3.10, torch 2.11, CGAL 5.6.1. Any CUDA GPU of compute capability 7.0+ should work — set
-`GPU_ARCHS` in [`script/build_tools.sh`](script/build_tools.sh) for a different one.
+Python 3.12, torch 2.11, CGAL 5.6.1. The scripts also run on CentraleSupélec's **DGX** (A100 with
+MIG slices); [`script/readme.md`](script/readme.md) gives the partitions and the `sbatch` overrides
+for it. Any CUDA GPU of compute capability 7.0+ should work — set `GPU_ARCHS=8.0` for a single
+generation.
 
 Everything except the four GPU methods runs on a CPU-only machine, and the test suite needs only
 numpy.
@@ -63,7 +65,7 @@ git clone https://github.com/omarbesbes/DelaunayBench
 cd DelaunayBench
 
 bash script/first_install.sh     # conda env, torch, the six libraries, the compiled tools
-conda activate "$WORKDIR/envs/delaunay"
+source script/env.sh             # activate it in a new shell
 ```
 
 `first_install.sh` clones and patches the upstream libraries rather than vendoring them: three of

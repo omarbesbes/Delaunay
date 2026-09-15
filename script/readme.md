@@ -14,8 +14,36 @@ Everything that is not the benchmark itself: installing, building, submitting, p
 | `diagnose_gpu.sh` | what a GPU node can and cannot do, for a bug report |
 | `check_gstar4d.py` | smoke-tests gStar4D alone, to tell a broken build from an input it cannot handle |
 | `patch_*.py` | source patches applied to the upstream repositories at install time; each explains why at its top |
+| `env.sh` | activates the conda environment (sourced by the install script and by every job); the single place where the environment is defined |
 
-The SLURM scripts are written for Ruche (Mesocentre Paris-Saclay, partition `gpua100`); adapt the
-partition, `--gres` and walltime for another cluster. Every job is submitted from the repository
-root: `sbatch script/run_jitter.sbatch`. Environment variables at the top of each script
-(`REPEATS`, `METHODS`, `JITTERS`, ...) narrow a run without editing it.
+## Which cluster
+
+The scripts run on both clusters we have used; `env.sh` finds conda either way.
+
+| | Ruche (Mesocentre) | DGX (CentraleSupelec) |
+|---|---|---|
+| conda | `module load anaconda3/...`, done by `env.sh` | already on the PATH |
+| environment | `$WORKDIR/envs/delaunay` | `$HOME/envs/delaunay` |
+| GPU partition | `gpua100` (full A100 40 GB) | `prod10`, `prod20`, `prod40`, `prod80` (MIG slices) |
+
+The `#SBATCH` directives in the job files target Ruche. On the DGX, override them on the command
+line -- `sbatch` flags win over the directives in the file:
+
+```bash
+# a full A100 (80 GB): the only DGX partition that allows 8 CPUs, which the CPU methods want
+sbatch --partition=prod80 --gres=gpu:A100.80gb:1 --cpus-per-task=8 --mem=64G \
+       script/run_jitter.sbatch
+
+# a 40 GB slice, 4 CPUs
+sbatch --partition=prod40 --gres=gpu:3g.40gb:1 --cpus-per-task=4 --mem=32G \
+       script/run_benchmark.sbatch
+```
+
+On the DGX the number of CPUs is bounded by the MIG slice (4 per `1g.10gb`, 8 for a full
+`A100.80gb`), so `--cpus-per-task` must be lowered together with the partition. The CPU methods
+(GeoDel, CGAL parallel) then have fewer threads, which changes their timings -- worth stating if
+results from the two clusters are compared.
+
+Every job is submitted from the repository root: `sbatch script/run_jitter.sbatch`. Environment
+variables at the top of each script (`REPEATS`, `METHODS`, `JITTERS`, ...) narrow a run without
+editing it.

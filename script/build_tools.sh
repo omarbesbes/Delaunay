@@ -1,3 +1,6 @@
+   Run this once on the LOGIN node, then resubmit the job:
+
+     cd $(pwd) && bash script/build_tools.sh
 #!/bin/bash
 # Build the standalone tools if they are missing (idempotent): the parallel CGAL tool, Local DeWall
 # and gStar4D.  Requires an activated environment (conda env with nvcc, CGAL headers, TBB).
@@ -16,16 +19,21 @@ PY=${PYTHON:-$(command -v python || command -v python3 || true)}
 
 # Every tool here is built with the conda environment's nvcc / CGAL headers / TBB, so the
 # environment has to be active.  Say that plainly instead of failing on a missing command.
+# The tools are built with the environment's nvcc, CGAL headers and TBB, so it has to be active.
+# When it is not, activate it here rather than telling the user to do it by hand.
+if [ -z "${CONDA_PREFIX:-}" ] || ! command -v nvcc >/dev/null 2>&1; then
+  # shellcheck disable=SC1091
+  . "$(dirname "$0")/env.sh" || exit 1
+  PY=${PYTHON:-$(command -v python || command -v python3 || true)}
+  CXX=${CXX:-x86_64-conda-linux-gnu-g++}
+fi
 missing=""
 [ -n "$PY" ] || missing="$missing python"
 command -v nvcc >/dev/null 2>&1 || missing="$missing nvcc"
 [ -n "${CONDA_PREFIX:-}" ] || missing="$missing \$CONDA_PREFIX"
 if [ -n "$missing" ]; then
-  echo "missing:$missing -- activate the environment first:"
-  echo "  module load anaconda3/2023.09-0/none-none"
-  echo "  source activate \${DELAUNAY_ENV:-\$WORKDIR/envs/delaunay}"
-  echo "  export CUDA_HOME=\$CONDA_PREFIX CC=x86_64-conda-linux-gnu-gcc CXX=x86_64-conda-linux-gnu-g++"
-  echo "(or run 'bash script/first_install.sh', which activates it and calls this script)"
+  echo "missing:$missing -- the project environment could not be activated."
+  echo "Run 'bash script/first_install.sh' first, or set DELAUNAY_ENV to an existing environment."
   exit 1
 fi
 
@@ -90,14 +98,11 @@ clone_or_explain() {  # clone_or_explain <url> <dir>
   cat >&2 <<MSG
 -- cannot fetch $url
 
-   $dir is missing and cloning failed.  On Ruche this almost always means the
-   command is running on a compute node, which has no internet access.
+   $dir is missing and cloning failed.  This almost always means the command is
+   running on a compute node, which has no route to the internet.
 
    Run this once on the LOGIN node, then resubmit the job:
 
-     module load anaconda3/2023.09-0/none-none
-     source activate \$WORKDIR/envs/delaunay
-     export CUDA_HOME=\$CONDA_PREFIX CC=x86_64-conda-linux-gnu-gcc CXX=x86_64-conda-linux-gnu-g++
      cd $(pwd) && bash script/build_tools.sh
 MSG
   return 1
