@@ -102,3 +102,30 @@ clusters are only comparable at equal thread counts.
 Every job is submitted from the repository root: `sbatch script/run_jitter.sbatch`. Environment
 variables at the top of each script (`REPEATS`, `METHODS`, `JITTERS`, ...) narrow a run without
 editing it.
+
+## gDel3D on small inputs: `patch_pygdel3d_final_flip.py`
+
+gDel3D returned 5 tetrahedra for the 8 corners of a cube where every other method returns 6 --
+and the same 5 for the jittered cube, whose Delaunay triangulation has 10. The output was the raw
+insertion result without a single flip: it did not cover the hull, and gDel3D's own checker said
+so (`self-check=False` in the logs). The cause is in `GpuDelaunay.cu`: the exact flipping pass
+defers any active set smaller than 64 tetrahedra to "the last round", and that round only runs
+once an insertion round has inserted fewer than 10 % of the points -- impossible below 11 points,
+and unlikely for a few dozen. Inputs from 505 points up were never affected (their tetrahedron
+counts match CGAL's), so the benchmark's numbers stand.
+
+`script/patch_pygdel3d_final_flip.py` makes the last round unconditional. It is a separate patch,
+kept out of `first_install.sh` on purpose so the validated install path stays as it is; apply it
+by hand, rebuild, and check the installed build on a GPU:
+
+```bash
+python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D --rebuild
+srun --partition=gpua100 --gres=gpu:1 --time=00:10:00 --pty \
+  python script/patch_pygdel3d_final_flip.py --verify      # DGX: --partition=prod10 --gres=none --cpus-per-task=4
+```
+
+`--verify` runs the cube, the jittered cube and random sets of 9 to 500 points through the
+benchmark's own wrapper and checks each result independently: every circumsphere empty, the
+boundary faces closing a convex surface, the summed volume equal to the enclosed one. To make the
+patch part of a fresh install, add `python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D`
+after the `patch_pygdel3d.py` line of `first_install.sh`.

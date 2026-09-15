@@ -30,7 +30,10 @@ distance between neighbouring points, removes the problem entirely.
 Getting that number required instrumenting the libraries ourselves
 ([`script/patch_pygdel3d.py`](script/patch_pygdel3d.py) adds three counters to gDel3D's CUDA
 kernels; CGAL is built with `-DCGAL_PROFILE`), because none of them exposes a usable one.
-Full analysis in [`docs/jitter_sweep.md`](docs/jitter_sweep.md).
+Full analysis in [`docs/jitter_sweep.md`](docs/jitter_sweep.md). A second, optional patch
+([`script/patch_pygdel3d_final_flip.py`](script/patch_pygdel3d_final_flip.py)) fixes a gDel3D bug
+on small inputs -- below a few dozen points it skipped its last flipping round and returned the
+raw insertion result; see [`script/readme.md`](script/readme.md).
 
 ## 📁 Project structure
 
