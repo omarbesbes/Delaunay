@@ -25,7 +25,10 @@ CONDA_MODULE=${CONDA_MODULE:-anaconda3/2023.09-0/none-none}
 #   3. it is installed somewhere in the user's home (the DGX documents plain venv and ships no
 #      conda, so one has to be installed there).
 # `module` is a shell function, which command -v finds.
-if ! command -v conda >/dev/null 2>&1 && command -v module >/dev/null 2>&1; then
+# The module step runs whenever a module system exists, not only when conda is missing: that is
+# exactly what the jobs did before this file existed, and Ruche is the cluster whose behaviour is
+# validated.  Where there is no module command (the DGX) the block is skipped entirely.
+if command -v module >/dev/null 2>&1; then
   set +u
   module purge >/dev/null 2>&1 || true
   module load "$CONDA_MODULE" >/dev/null 2>&1 || true
@@ -114,4 +117,10 @@ CUDA_TARGET=$CONDA_PREFIX/targets/x86_64-linux
 export PARAGRAM_MAX_PLANES=${PARAGRAM_MAX_PLANES:-128} PARAGRAM_MAX_VERTS=${PARAGRAM_MAX_VERTS:-128}
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 # the studies live in src/ and import one another by plain module name
-[ -d "$PWD/src" ] && export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+if [ -d "$PWD/src" ]; then
+  export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+fi
+
+# Sourcing this file must succeed: it runs under `set -e` in every job, where a non-zero status
+# from the last command above would abort the job.
+true
