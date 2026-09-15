@@ -114,12 +114,25 @@ once an insertion round has inserted fewer than 10 % of the points -- impossible
 and unlikely for a few dozen. Inputs from 505 points up were never affected (their tetrahedron
 counts match CGAL's), so the benchmark's numbers stand.
 
-`script/patch_pygdel3d_final_flip.py` makes the last round unconditional. It is a separate patch,
-kept out of `first_install.sh` on purpose so the validated install path stays as it is; apply it
-by hand, rebuild, and check the installed build on a GPU:
+`script/patch_pygdel3d_final_flip.py` makes the last round run unconditionally, **and keeps the
+upstream behaviour available**: one build serves both, selected by an environment variable that
+every entry point inherits (`main.py`, the `sbatch` files, `--verify`):
 
 ```bash
-python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D --rebuild
+sbatch script/run_benchmark.sbatch                     # corrected gDel3D (default)
+GDEL3D_ORIGINAL=1 sbatch script/run_benchmark.sbatch   # gDel3D as published -- the reference run's behaviour
+```
+
+Which one produced a result is recorded, not remembered: gDel3D's statistics gain
+`finalRoundSkippedNum`, 1 when the upstream behaviour skipped the round and 0 when it ran (the
+corrected behaviour, or an input large enough for upstream's own rule to fire). It comes out in
+`get_stats()` and hence in the benchmark's `stats_ms` block for every gDel3D measurement.
+
+It is a separate patch, kept out of `first_install.sh` on purpose so the validated install path
+stays as it is; apply it by hand, rebuild, and check the installed build on a GPU:
+
+```bash
+python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D --rebuild   # GPU_ARCHS=8.0 for A100 only
 
 # Ruche
 srun --partition=gpua100 --gres=gpu:1 --time=00:10:00 --pty python script/patch_pygdel3d_final_flip.py --verify
@@ -132,14 +145,17 @@ sbatch --partition=prod10 --gres=none --cpus-per-task=4 --time=00:10:00 --job-na
 ```
 
 `--verify` runs the cube, the jittered cube and random sets of 9 to 500 points through the
-benchmark's own wrapper and checks each result independently: every circumsphere empty, the
-boundary faces closing a convex surface, the summed volume equal to the enclosed one. To make the
-patch part of a fresh install, add `python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D`
+benchmark's own wrapper, **in both modes**, and checks each result independently: every
+circumsphere empty, the boundary faces closing a convex surface, the summed volume equal to the
+enclosed one. The `original` rows show the bug (and `skipped=1`), the `corrected` rows decide the
+exit status. The script also upgrades an installation carrying its first version (which had no
+switch); the patch is idempotent and independent of the order with `patch_pygdel3d.py`. To make it
+part of a fresh install, add `python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D`
 after the `patch_pygdel3d.py` line of `first_install.sh`.
 
-Verified on the DGX (job 8419, `interactive10`): all 13 cases pass. The cube comes out as 9
-tetrahedra, 6 of them real and 3 flat -- zero-volume tetrahedra on the cube's co-planar faces,
-the same artefact of gDel3D's symbolic perturbation as the 14 980 flat tetrahedra on
+Verified on the DGX (job 8419, `interactive10`), first version: all 13 cases pass. The cube comes
+out as 9 tetrahedra, 6 of them real and 3 flat -- zero-volume tetrahedra on the cube's co-planar
+faces, the same artefact of gDel3D's symbolic perturbation as the 14 980 flat tetrahedra on
 `voronoi_iarpa_001`; the volume covered is the cube's, and `degenerate_tets` in the benchmark
 table will read 3 for it. The jittered cube gives CGAL's 10.
 

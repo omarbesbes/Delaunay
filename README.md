@@ -33,7 +33,9 @@ kernels; CGAL is built with `-DCGAL_PROFILE`), because the upstream implementati
 all the measurements required by the study. A second, optional patch
 ([`script/patch_pygdel3d_final_flip.py`](script/patch_pygdel3d_final_flip.py)) fixes a gDel3D bug
 on small inputs -- below a few dozen points it skipped its last flipping round and returned the
-raw insertion result; see [`script/readme.md`](script/readme.md).
+raw insertion result. The published behaviour stays available for comparison
+(`GDEL3D_ORIGINAL=1`), and every gDel3D result records which of the two produced it; see
+[`script/readme.md`](script/readme.md).
 
 ## 📁 Project structure
 

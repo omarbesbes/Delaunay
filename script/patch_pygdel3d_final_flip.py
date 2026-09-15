@@ -1,8 +1,16 @@
-"""Make gDel3D's last round of flipping unconditional, so that small inputs come out Delaunay.
+"""Fix gDel3D's skipped last flipping round, keeping upstream's behaviour available for comparison.
 
     python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D             # patch the source
     python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D --rebuild   # ... and reinstall
     python script/patch_pygdel3d_final_flip.py --verify                         # on a GPU node
+
+Once installed, one build serves both behaviours:
+
+    sbatch script/run_benchmark.sbatch                     # corrected gDel3D (default)
+    GDEL3D_ORIGINAL=1 sbatch script/run_benchmark.sbatch   # gDel3D as published, bug included
+
+and gDel3D's statistics carry `finalRoundSkippedNum` (1 when the upstream behaviour skipped the
+round, 0 when it ran), so a result says which of the two produced it.
 
 Symptom.  On the 8 corners of a cube gDel3D returned 5 tetrahedra where CGAL, GeoDel and Local
 DeWall return 6; its own checker reported a failure, and the 5 tetrahedra held 5/6 of the cube's
@@ -33,13 +41,16 @@ there match CGAL's, up to the flat tetrahedra its symbolic perturbation adds on 
 
 Fix.  Run the last round unconditionally, with _doFlipping cleared so that doFlipping() no longer
 defers.  When nothing was deferred both loops find no active tetrahedron and return immediately,
-after one compaction of the status bytes each, so large inputs are not measurably affected.
+after one compaction of the status bytes each -- measured on a 100 000-point cloud: same
+tetrahedra, same time.  With GDEL3D_ORIGINAL set (to anything but "0" or empty) the block is
+upstream's, verbatim.
 
 This lives apart from patch_pygdel3d.py (counters, bindings) on purpose: that patch is validated,
 and this one can be applied, or not, on its own.  Both are idempotent and independent of the order
-in which they are applied.  The extension must be rebuilt afterwards (--rebuild, or the pip line of
-first_install.sh); --verify then runs the installed build on small inputs and checks the result
-with an independent empty-sphere and hull-coverage test.
+in which they are applied; this one also upgrades its own earlier version (which had no switch).
+The extension must be rebuilt afterwards (--rebuild, or the pip line of first_install.sh); --verify
+then runs the installed build on small inputs in both modes and checks each result with an
+independent empty-sphere and hull-coverage test.
 """
 
 from __future__ import annotations
@@ -52,11 +63,20 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MARKER = "patch_pygdel3d_final_flip.py"
-GPU_DELAUNAY_CU = os.path.join("src", "gdel3d", "gDel3D", "GpuDelaunay.cu")
+SWITCH = "GDEL3D_ORIGINAL"
+STAT = "finalRoundSkippedNum"
 
-# The block at the end of GpuDel::splitAndFlip().  Whitespace-tolerant because the upstream
-# sources have inconsistent trailing whitespace; line endings are normalised by _read.
-ANCHOR = re.compile(
+CORE = os.path.join("src", "gdel3d", "gDel3D")
+GPU_DELAUNAY_CU = os.path.join(CORE, "GpuDelaunay.cu")
+COMMON_TYPES_H = os.path.join(CORE, "CommonTypes.h")
+BINDINGS_CPP = os.path.join("src", "gdel3d", "bindings.cpp")
+
+# ---------------------------------------------------------------------------------------
+# GpuDelaunay.cu: the block at the end of GpuDel::splitAndFlip()
+# ---------------------------------------------------------------------------------------
+# Whitespace-tolerant because the upstream sources have inconsistent trailing whitespace; line
+# endings are normalised by _read.
+UPSTREAM_BLOCK = re.compile(
     r"\n([ \t]*)if \( !_doFlipping \)[ \t]*\n"
     r"[ \t]*\{[ \t]*\n"
     r"[ \t]*doFlippingLoop\( SphereFastOrientFast \);[ \t]*\n"
@@ -66,45 +86,141 @@ ANCHOR = re.compile(
     r"[ \t]*\}[ \t]*\n"
 )
 
-REPLACEMENT = """
-{i}// {marker}: the last round of flipping, unconditionally.
+# The first version of this patch (no switch, no counter): recognised and upgraded.
+V1_BLOCK = re.compile(
+    r"\n([ \t]*)// patch_pygdel3d_final_flip\.py: the last round of flipping, unconditionally\.[ \t]*\n"
+    r"(?:[ \t]*//.*\n)*"
+    r"[ \t]*_doFlipping = false;[ \t]*\n"
+    r"[ \t]*\n"
+    r"[ \t]*doFlippingLoop\( SphereFastOrientFast \);[ \t]*\n"
+    r"[ \t]*\n"
+    r"[ \t]*markSpecialTets\(\);[ \t]*\n"
+    r"[ \t]*doFlippingLoop\( SphereExactOrientSoS \);[ \t]*\n"
+)
+
+BLOCK = """
+{i}// {marker}: the last round of flipping.
 {i}//
-{i}// Upstream ran this block only once splitTetra() had cleared _doFlipping, which it does when
-{i}// an insertion round inserts fewer than 10% of the points -- the tail of a large input.
+{i}// Upstream ran it only once splitTetra() had cleared _doFlipping, which it does when an
+{i}// insertion round inserts fewer than 10% of the points -- the tail of a large input.
 {i}// doFlipping() counts on that: while _doFlipping is set, its exact pass skips any active set
 {i}// smaller than PredThreadsPerBlock ("leave it for the last round").  For a small input the
 {i}// 10% rule never fires (8 points: 10% is 0.9 point), the deferred tetrahedra were never
 {i}// flipped, and the raw insertion result came out -- 5 tetrahedra for the corners of a cube
-{i}// instead of 6, neither Delaunay nor covering the hull.  When nothing was deferred both
-{i}// loops find no active tetrahedron and return at once.
-{i}_doFlipping = false;
+{i}// instead of 6, neither Delaunay nor covering the hull.
+{i}//
+{i}// Corrected behaviour (default): clear the flag, so the round always runs; when nothing was
+{i}// deferred both loops find no active tetrahedron and return at once.  {switch}=1 in
+{i}// the environment keeps upstream's behaviour, for comparison.  {stat} records
+{i}// whether the round was skipped, so a result says which of the two produced it.
+{i}const char* gdel3dOriginal = getenv( "{switch}" );
+{i}const bool  keepUpstream   = ( gdel3dOriginal != NULL && gdel3dOriginal[0] != '\\0' && gdel3dOriginal[0] != '0' );
 
-{i}doFlippingLoop( SphereFastOrientFast );
+{i}if ( !keepUpstream )
+{i}    _doFlipping = false;
 
-{i}markSpecialTets();
-{i}doFlippingLoop( SphereExactOrientSoS );
+{i}if ( _doFlipping )
+{i}    ++_output->stats.{stat};
+{i}else
+{i}{{
+{i}    doFlippingLoop( SphereFastOrientFast );
+
+{i}    markSpecialTets();
+{i}    doFlippingLoop( SphereExactOrientSoS );
+{i}}}
 """
 
+INCLUDE_ANCHOR = re.compile(r'(?m)^#include "GpuDelaunay\.h"[ \t]*\n')
+INCLUDE = f"#include <cstdlib>   // {MARKER}: getenv\n"
 
-def apply(text: str) -> tuple[str, str]:
+
+def apply_gpu_delaunay(text: str) -> tuple[str, str]:
     """Patch the LF-normalised text of GpuDelaunay.cu.
 
-    Returns (new text, status), status being "patched", "already" or "missing".
+    Returns (new text, status): "patched" from upstream, "upgraded" from this patch's first
+    version, "already", or "missing" when the end of splitAndFlip() is not the upstream one.
     """
-    if MARKER in text:
+    if SWITCH in text:
         return text, "already"
-    m = ANCHOR.search(text)
+    m = V1_BLOCK.search(text)
+    status = "upgraded"
+    if m is None:
+        m = UPSTREAM_BLOCK.search(text)
+        status = "patched"
     if m is None:
         return text, "missing"
-    new = REPLACEMENT.format(i=m.group(1), marker=MARKER)
-    return text[: m.start()] + new + text[m.end() :], "patched"
+    block = BLOCK.format(i=m.group(1), marker=MARKER, switch=SWITCH, stat=STAT)
+    out = text[: m.start()] + block + text[m.end() :]
+    if INCLUDE not in out:
+        out, n = INCLUDE_ANCHOR.subn(lambda m: m.group(0) + INCLUDE, out, count=1)
+        if n != 1:
+            return text, "missing"
+    return out, status
+
+
+# ---------------------------------------------------------------------------------------
+# CommonTypes.h: the Statistics field
+# ---------------------------------------------------------------------------------------
+# Anchored on the totalFlipNum lines, like patch_pygdel3d.py's own fields: whichever patch runs
+# second still finds its anchor, so the order does not matter.
+COMMON_TYPES_EDITS = [
+    (
+        r"(\n([ \t]*)int totalFlipNum;[ \t]*\n)",
+        "\\1"
+        "\n"
+        f"\\2// {MARKER}: 1 when {SWITCH} kept upstream's behaviour and the\n"
+        "\\2// last flipping round was skipped, 0 when it ran (the corrected behaviour, or an input\n"
+        "\\2// large enough for upstream's rule to fire).\n"
+        f"\\2int {STAT};\n",
+    ),
+    (r"(\n([ \t]*)totalFlipNum[ \t]*= 0;[ \t]*\n)", f"\\1\\2{STAT} = 0;\n"),
+    (
+        r"(\n([ \t]*)totalFlipNum[ \t]*\+= s\.totalFlipNum;[ \t]*\n)",
+        f"\\1\\2{STAT} += s.{STAT};\n",
+    ),
+    (r"(\n([ \t]*)totalFlipNum[ \t]*/= div;[ \t]*\n)", f"\\1\\2{STAT} /= div;\n"),
+]
+
+
+def apply_common_types(text: str) -> tuple[str, str]:
+    if STAT in text:
+        return text, "already"
+    out = text
+    for pattern, repl in COMMON_TYPES_EDITS:
+        out, n = re.subn(pattern, repl, out, count=1)
+        if n != 1:
+            return text, "missing"
+    return out, "patched"
+
+
+# ---------------------------------------------------------------------------------------
+# bindings.cpp: expose the field through get_stats(), which patch_pygdel3d.py adds
+# ---------------------------------------------------------------------------------------
+STATS_ANCHOR = re.compile(
+    r'(\n([ \t]*)d\["finalStarNum"\] = output\.stats\.finalStarNum;[ \t]*\n)'
+)
+
+
+def apply_bindings(text: str) -> tuple[str, str]:
+    """Returns "skipped" while get_stats() is absent (run patch_pygdel3d.py, then this again)."""
+    if STAT in text:
+        return text, "already"
+    out, n = STATS_ANCHOR.subn(
+        f'\\1\\2d["{STAT}"] = output.stats.{STAT};  // {MARKER}\n', text, count=1
+    )
+    return (out, "patched") if n == 1 else (text, "skipped")
+
+
+# ---------------------------------------------------------------------------------------
+# files
+# ---------------------------------------------------------------------------------------
 
 
 def _read(path: str) -> tuple[str, str]:
     """(text with LF endings, the file's own line ending).
 
-    GpuDelaunay.cu is CRLF; rewriting it with LF would turn a ten-line patch into a whole-file
-    diff.
+    The gDel3D sources are CRLF; rewriting them with LF would turn a twenty-line patch into whole-
+    file diffs.
     """
     with open(path, newline="") as f:
         raw = f.read()
@@ -118,23 +234,33 @@ def _write(path: str, text: str, eol: str) -> None:
 
 
 def patch(repo: str) -> bool:
-    path = os.path.join(repo, GPU_DELAUNAY_CU)
-    if not os.path.isfile(path):
-        print(f"{path}: not found (is {repo!r} a pyGDel3D checkout?)")
-        return False
-    text, eol = _read(path)
-    new, status = apply(text)
-    if status == "missing":
-        print(
-            f"{path}: anchor not found -- the end of GpuDel::splitAndFlip() differs from upstream"
-        )
-        return False
-    if status == "already":
-        print(f"{path}: already patched (final flipping round)")
-        return True
-    _write(path, new, eol)
-    print(f"{path}: patched (the final flipping round is now unconditional)")
-    return True
+    steps = [
+        (GPU_DELAUNAY_CU, apply_gpu_delaunay, "final flipping round + GDEL3D_ORIGINAL switch"),
+        (COMMON_TYPES_H, apply_common_types, f"Statistics.{STAT}"),
+        (BINDINGS_CPP, apply_bindings, f"{STAT} in get_stats()"),
+    ]
+    ok = True
+    for rel, fn, what in steps:
+        path = os.path.join(repo, rel)
+        if not os.path.isfile(path):
+            print(f"{path}: not found (is {repo!r} a pyGDel3D checkout?)")
+            return False
+        text, eol = _read(path)
+        new, status = fn(text)
+        if status == "missing":
+            print(f"{path}: anchor not found -- the source differs from upstream ({what})")
+            ok = False
+        elif status == "skipped":
+            print(
+                f"{path}: get_stats() not present, {STAT} not exposed -- run patch_pygdel3d.py,"
+                " then this script again"
+            )
+        elif status == "already":
+            print(f"{path}: already patched ({what})")
+        else:
+            _write(path, new, eol)
+            print(f"{path}: {status} ({what})")
+    return ok
 
 
 def rebuild(repo: str) -> bool:
@@ -231,7 +357,12 @@ def check_triangulation(points, tets) -> tuple[list[str], dict]:
 
 
 def verify(seed: int = 0) -> bool:
-    """Run the installed gDel3D, through the benchmark's own wrapper, on the inputs the bug hit."""
+    """Run the installed gDel3D, through the benchmark's own wrapper, on the inputs the bug hit.
+
+    Every case runs twice: with GDEL3D_ORIGINAL=1 (upstream's behaviour, shown for the record) and
+    without (the corrected one, which decides the exit status).  The `skipped` column is
+    finalRoundSkippedNum as reported by gDel3D itself.
+    """
     import numpy as np
 
     sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -256,37 +387,50 @@ def verify(seed: int = 0) -> bool:
     ]
 
     print(
-        f"{'case':<14}{'N':>5}{'tets':>6}{'flat':>5}{'self-chk':>9}{'viol':>5}{'hull':>5}"
-        f"{'vol/hull':>9}{'s':>7}  verdict"
+        f"{'case':<14}{'mode':<10}{'N':>5}{'tets':>6}{'flat':>5}{'self-chk':>9}{'viol':>5}"
+        f"{'hull':>5}{'vol/hull':>9}{'skipped':>8}{'s':>7}  verdict"
     )
     all_ok = True
     for name, raw in cases:
         pts = (
             T.unit_cube(raw).astype(np.float32).astype(np.float64)
         )  # the benchmark's preprocessing
-        tets, seconds, info = T.run_gdel3d(pts)
-        problems, f = check_triangulation(pts, tets)
-        if info.get("self_check") is not True:
-            problems.append(f"gDel3D's own checker says {info.get('self_check')}")
-        ok = not problems
-        all_ok &= ok
-        ratio = f["volume"] / f["hull_volume"] if f.get("hull_volume") else float("nan")
-        print(
-            f"{name:<14}{len(pts):>5}{f['tets']:>6}{f['flat']:>5}{str(info.get('self_check')):>9}"
-            f"{f['violations']:>5}{'ok' if f['hull_ok'] else 'NO':>5}{ratio:>9.4f}{seconds:>7.3f}"
-            f"  {'ok' if ok else 'FAIL: ' + '; '.join(problems)}"
-        )
+        for mode in ("original", "corrected"):
+            if mode == "original":
+                os.environ[SWITCH] = "1"
+            else:
+                os.environ.pop(SWITCH, None)
+            tets, seconds, info = T.run_gdel3d(pts)
+            problems, f = check_triangulation(pts, tets)
+            if info.get("self_check") is not True:
+                problems.append(f"gDel3D's own checker says {info.get('self_check')}")
+            ok = not problems
+            if mode == "corrected":
+                all_ok &= ok
+            skipped = info.get("stats_ms", {}).get(STAT, "?")
+            ratio = f["volume"] / f["hull_volume"] if f.get("hull_volume") else float("nan")
+            verdict = (
+                "ok"
+                if ok
+                else ("as upstream: " if mode == "original" else "FAIL: ") + "; ".join(problems)
+            )
+            print(
+                f"{name:<14}{mode:<10}{len(pts):>5}{f['tets']:>6}{f['flat']:>5}"
+                f"{str(info.get('self_check')):>9}{f['violations']:>5}"
+                f"{'ok' if f['hull_ok'] else 'NO':>5}{ratio:>9.4f}{str(skipped):>8}{seconds:>7.3f}  {verdict}"
+            )
+    os.environ.pop(SWITCH, None)
     if not all_ok:
         print(
-            "\nIf cube8 gives 5 tetrahedra with self-check False, the installed extension predates"
-            " this patch: rebuild it (--rebuild) and run --verify again."
+            "\nA corrected row failing with 5 tetrahedra and self-check False means the installed"
+            " extension predates this patch: rebuild it (--rebuild) and run --verify again."
         )
     return all_ok
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        description="Make gDel3D's final flipping round unconditional (small inputs came out unflipped)."
+        description="Fix gDel3D's skipped last flipping round; GDEL3D_ORIGINAL=1 keeps upstream's behaviour."
     )
     ap.add_argument("repo", nargs="?", help="pyGDel3D checkout (default third_party/pyGDel3D)")
     ap.add_argument(
