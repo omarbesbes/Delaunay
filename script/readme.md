@@ -120,8 +120,15 @@ by hand, rebuild, and check the installed build on a GPU:
 
 ```bash
 python script/patch_pygdel3d_final_flip.py third_party/pyGDel3D --rebuild
-srun --partition=gpua100 --gres=gpu:1 --time=00:10:00 --pty \
-  python script/patch_pygdel3d_final_flip.py --verify      # DGX: --partition=prod10 --gres=none --cpus-per-task=4
+
+# Ruche
+srun --partition=gpua100 --gres=gpu:1 --time=00:10:00 --pty python script/patch_pygdel3d_final_flip.py --verify
+# DGX: the prod* partitions refuse srun ("sbatch script only"); interactive10 takes it ...
+srun --partition=interactive10 --gres=none --cpus-per-task=4 --time=00:10:00 --pty \
+  python script/patch_pygdel3d_final_flip.py --verify
+# ... or wrap it in a batch job on prod10 and read results/verify.o<jobid>
+sbatch --partition=prod10 --gres=none --cpus-per-task=4 --time=00:10:00 --job-name=verify \
+  --output=results/%x.o%j --wrap '. script/env.sh && python script/patch_pygdel3d_final_flip.py --verify'
 ```
 
 `--verify` runs the cube, the jittered cube and random sets of 9 to 500 points through the
