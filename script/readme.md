@@ -185,8 +185,19 @@ faces, the same artefact of gDel3D's symbolic perturbation as the 14 980 flat te
 `voronoi_iarpa_001`; the volume covered is the cube's, and `degenerate_tets` in the benchmark
 table will read 3 for it. The jittered cube gives CGAL's 10.
 
-Large inputs, measured before and after on the same MIG slice (`script/run_triangulate.sbatch`,
-`voronoi_iarpa_001`, `CHECK=true`): with `JITTER=1e-6`, 669 051 tetrahedra identical to CGAL's
-both times, 0.141 s before and 0.128 s after (noise); on the raw cloud, 675 445 tetrahedra, of
-which 14 980 flat ones CGAL does not have and none of CGAL's missing -- the reference run's
-structure exactly.
+Large inputs, both modes on the same MIG slice in one session (DGX job 8448, `run_jitter`'s
+protocol through `main.py experiment=jitter_sweep methods=gdel3d repeats=10`: one warm-up run, then
+the mean of 10):
+
+| cloud | jitter | upstream | corrected | ratio | tetrahedra |
+|---|---|---|---|---|---|
+| `voronoi_iarpa_001` | 0 | 0.469 s | 0.471 s | 1.004 | 675 445 = 675 445 |
+| `voronoi_iarpa_001` | 1e-6 | 0.092 s | 0.091 s | 0.992 | 669 051 = 669 051 |
+| `voronoi_jax_068` | 0 | 1.080 s | 1.082 s | 1.003 | 690 910 = 690 910 |
+| `voronoi_jax_068` | 1e-6 | 0.093 s | 0.092 s | 0.994 | 665 402 = 665 402 |
+
+Within ±0.5 % either way -- noise -- with identical triangulations in all four cases (same counts,
+same +14 980 / +48 889 flat tetrahedra over CGAL on the raw clouds, +0 with jitter). The exact
+in-sphere counts differ by a tenth of a percent between the two runs (180 397 vs 180 832 on raw
+iarpa), which is the usual non-determinism of the parallel flipping, not the patch. On inputs this
+size upstream's own rule always fires, so the added pass finds nothing to do.
