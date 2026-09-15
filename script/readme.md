@@ -16,6 +16,23 @@ Everything that is not the benchmark itself: installing, building, submitting, p
 | `patch_*.py` | source patches applied to the upstream repositories at install time; each explains why at its top |
 | `env.sh` | activates the conda environment (sourced by the install script and by every job); the single place where the environment is defined |
 
+## Do not run the tools bare on a login node
+
+`bin/cgal_delaunay` is built with TBB, which sizes its thread pool from the machine. On a login
+node nothing restricts it, and on a 128-core DGX the parallel insertion of a small point set does
+not merely slow down -- it stops making progress:
+
+```
+CGAL_THREADS=4   bin/cgal_delaunay /tmp/p.f64 /tmp/t.i32    # 0.30 s, 133 665 cells
+CGAL_THREADS=128 bin/cgal_delaunay /tmp/p.f64 /tmp/t.i32    # never returns
+```
+
+20 000 points over 128 threads is 156 points each, and the threads spend their time retrying
+against the lock grid. Set `CGAL_THREADS` when running the tool by hand outside a job.
+
+Inside a job this does not arise: SLURM's affinity mask already tells TBB how many cores it has
+(the Ruche logs read `parallel (8 threads)`), so the measurements are unaffected.
+
 ## Which cluster
 
 The scripts run on both clusters we have used; `env.sh` finds conda either way.
