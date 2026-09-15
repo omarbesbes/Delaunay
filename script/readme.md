@@ -142,3 +142,9 @@ tetrahedra, 6 of them real and 3 flat -- zero-volume tetrahedra on the cube's co
 the same artefact of gDel3D's symbolic perturbation as the 14 980 flat tetrahedra on
 `voronoi_iarpa_001`; the volume covered is the cube's, and `degenerate_tets` in the benchmark
 table will read 3 for it. The jittered cube gives CGAL's 10.
+
+Large inputs, measured before and after on the same MIG slice (`script/run_triangulate.sbatch`,
+`voronoi_iarpa_001`, `CHECK=true`): with `JITTER=1e-6`, 669 051 tetrahedra identical to CGAL's
+both times, 0.141 s before and 0.128 s after (noise); on the raw cloud, 675 445 tetrahedra, of
+which 14 980 flat ones CGAL does not have and none of CGAL's missing -- the reference run's
+structure exactly.
