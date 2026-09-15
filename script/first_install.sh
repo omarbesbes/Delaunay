@@ -15,7 +15,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 mkdir -p bin third_party results    # git-ignored, absent in a fresh clone
-ARCHS=${GPU_ARCHS:-${TORCH_CUDA_ARCH_LIST:-"7.0;8.0"}}   # V100 (sm_70) and A100 (sm_80)
+# CUDA architectures to build for.  Deliberately NOT read from TORCH_CUDA_ARCH_LIST: torch sets it
+# to its own full default (13 architectures on CUDA 12.8), and each one multiplies the compile time
+# of pyGDel3D's extension and of the two CUDA tools.  GPU_ARCHS=8.0 is enough for an A100-only
+# cluster, "7.0;8.0" covers V100 and A100.
+ARCHS=${GPU_ARCHS:-"7.0;8.0"}
 
 echo "== [1/7] conda environment"
 # The DGX ships no conda (it documents plain venv), and pip cannot provide nvcc, GCC 13, the CGAL
@@ -70,6 +74,13 @@ if archs and "sm_70" not in archs:
         "        TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126 REBUILD=1 bash script/first_install.sh"
     )
 PY
+
+N_ARCHS=$(echo "$ARCHS" | tr ';,' '  ' | wc -w | tr -d ' ')
+if [ "$N_ARCHS" -gt 3 ]; then
+  echo "NOTE: building for $N_ARCHS CUDA architectures ($ARCHS)."
+  echo "      Each one is compiled separately, so this multiplies the build time of pyGDel3D and"
+  echo "      of the CUDA tools.  Pass the one your cluster has -- GPU_ARCHS=8.0 for A100 only."
+fi
 
 echo "== [3/7] standalone tools: parallel CGAL + Local DeWall + gStar4D"
 GPU_ARCHS="$ARCHS" bash script/build_tools.sh ${REBUILD:+--force}
