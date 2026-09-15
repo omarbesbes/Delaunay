@@ -78,11 +78,16 @@ A100.80gb GRES in partition prod80*, and every specific name, including the `A10
 plugin's own message quotes, with *Requested node configuration is not available*. Since Ruche does
 need `--gres=gpu:1`, the directive stays in the files and `--gres=none` cancels it here.
 
-Each partition also caps the CPUs per GPU slice, and the files ask for 8: `prod10` allows 4, so it
-needs `--cpus-per-task=4` as well. The submit plugin names the cap in its refusal (*too many CPUs
-requested for partition prod10 (max. 4 for 1 requested GPU(s))*), so there is nothing to look up --
-read it off the error and resubmit. The jobs derive their thread counts from
-`$SLURM_CPUS_PER_TASK`, so a smaller allocation is measured correctly, just with fewer threads.
+Each partition also caps the CPUs and the memory per GPU slice, and the files ask for more:
+`prod10` allows 4 CPUs (`--cpus-per-task=4`) and 15 GB (`MaxMemPerNode=15360`, so `--mem=8G`
+or at most `--mem=15G`; the files' 32G, 64G and 128G all exceed it). The two limits fail
+differently: the CPU one is refused at submission with the cap in the message (*too many CPUs
+requested for partition prod10 (max. 4 for 1 requested GPU(s))*); the memory one is **accepted
+and never starts** -- `squeue` shows the job pending with reason `MaxMemPerLimit`, indefinitely.
+`scontrol show partition prod10 | grep -o "MaxMemPer[A-Za-z]*=[0-9]*"` gives the number. The
+jobs derive their thread counts from `$SLURM_CPUS_PER_TASK`, so a smaller allocation is measured
+correctly, just with fewer threads; 8 GB has been enough for gDel3D with the CGAL reference on a
+100 000-point cloud.
 
 `--test-only` answers both questions in a second, without queueing anything:
 
